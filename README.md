@@ -26,9 +26,14 @@ uv run yad2 search RTX --product-type 285 --condition 2 --condition 3 --max-pric
 # Furniture: text, collection, price and city filters
 uv run yad2 search 'ספה' --collection furniture --max-price 1500 --city 5000
 
-# Discover current categories instead of maintaining a stale ID catalog
+# Discover live collection slugs
 uv run yad2 categories --query computer
 uv run yad2 categories --query 'ריהוט'
+
+# Offline product/attribute IDs and readable enum names
+uv run yad2 product-types --query computer
+uv run yad2 attributes COMPUTER_COMPONENTS
+uv run yad2 search RTX --product-type COMPUTER_COMPONENTS --attribute 155=13287
 
 # Pagination: each call returns one full upstream page, plus next_url
 uv run yad2 search RTX --page 2
@@ -42,7 +47,9 @@ Queries remain in the supplied language. Hebrew usually works best for furniture
 names work well for hardware. Results reflect Yad2's relevance and promotion logic, not exact substring
 matching. Conditions currently use `1` = new in packaging, `2` = like new, `3` = used. Computer parts use
 product type `285`; use returned `product_type_id` and `city_id` fields or the site's filtered URLs for
-other IDs. `--city`, `--area`, `--condition`, and `--product-type` are repeatable.
+other IDs. `--city`, `--area`, `--condition`, `--product-type`, and `--attribute` are repeatable.
+Product types accept numeric IDs, enum names, or exact English/Hebrew labels in the CLI.
+Attribute filters use `ATTRIBUTE_ID=OPTION_ID[,OPTION_ID]`; combine multiple options for one attribute.
 
 Successful commands emit UTF-8 JSON on stdout. Results include `source_url`, `fetched_at`, and `cached`;
 search results also include `total`, `page`, `total_pages`, `next_url`, and parser `warnings`. Missing
@@ -71,6 +78,8 @@ Use an absolute path to `uv` if your desktop client's PATH does not include it.
 | `search_market` | Typed marketplace query/filter object, plus optional `refresh` |
 | `get_listing` | Market numeric ID or full listing URL |
 | `list_categories` | Live collection discovery, filtered by English slug/Hebrew title |
+| `list_product_types` | Offline product IDs, enum names, and bilingual labels |
+| `list_attributes` | Offline product-specific attributes, input types, and option IDs |
 | `search_url` | Marketplace, property, and vehicle feeds with their existing URL filters |
 | `inspect_page` | Bounded Next.js JSON inspection using a dot path |
 
@@ -81,6 +90,7 @@ All tools declare input/output schemas, structured results, and read-only annota
   "search": {
     "query": "RTX",
     "product_types": ["285"],
+    "attributes": [{"attribute_id": "155", "values": ["13287"]}],
     "max_price": 2000,
     "conditions": ["2", "3"],
     "sort": "priceAsc",
@@ -167,6 +177,70 @@ asyncio.run(main())
 `Yad2Client(settings=Settings(...), transport=...)` supports explicit configuration and injectable async
 transports. Pure parsers consume `PageSnapshot` objects for offline tests. Package dependencies flow
 from agent → client, never the reverse.
+
+### Product and attribute enums
+
+The bundled marketplace taxonomy comes from the authenticated publishing catalog, which includes
+product types and options absent from current search results. It covers marketplace goods; property
+and vehicle taxonomies are separate. Reading the bundled snapshot requires neither login nor a browser.
+The **2026-11-05** snapshot contains **267 product types, 322 attributes, and 3,616 attribute-option IDs**.
+
+```python
+from yad2_client import Attribute, AttributeFilter, MarketSearch, ProductType
+from yad2_client.catalog import catalog_product, catalog_products
+from yad2_client.options import ComputerComponentTypeOption
+
+assert ProductType("285") is ProductType.COMPUTER_COMPONENTS
+print(ProductType.COMPUTER_COMPONENTS.label_he)  # רכיבי מחשב
+print(ProductType.COMPUTER_COMPONENTS.label_en)  # Computer Components
+
+search = MarketSearch(
+    query="RTX",
+    product_types=(ProductType.COMPUTER_COMPONENTS,),
+    attributes=(
+        AttributeFilter(
+            attribute_id=Attribute.COMPUTER_COMPONENT_TYPE,
+            values=(ComputerComponentTypeOption.כרטיס_מסך,),
+        ),
+    ),
+)
+print(catalog_products("furniture"))
+print(catalog_product(ProductType.COMPUTER_COMPONENTS).attributes)
+```
+
+`ProductType` and `Attribute` are string enums: their values are Yad2 IDs and they serialize as strings.
+`yad2_client.options` contains one option enum per attribute and an `OPTION_ENUMS` registry keyed by
+`Attribute`. Product/attribute names use the source English labels. Option names preserve the supplied
+labels, often Hebrew-only; their `label_en` is empty when the source supplies no English translation.
+Duplicate names receive an ID suffix. The original labels remain available on every enum member.
+
+The global option enums contain the union across products. Use `catalog_product()` / `list_attributes`
+to discover which options apply to a particular product, including its input type and required flag.
+Publishing fields are not necessarily available as search filters; `AttributeFilter` represents
+option-ID filters observed in the search frontend, not arbitrary numeric/text publishing values.
+Raw numeric IDs remain supported for additions newer than the snapshot. Snapshot results include
+their fetch date and source URL; enum conversion raises `ValueError` for unknown IDs.
+
+#### Refreshing the snapshot
+
+The refresh tool uses authenticated, sequential browser GET requests, with at least three seconds
+between requests, stopping on challenges or errors. It never submits the publishing form. Use a fresh
+capture directory for a new snapshot; reuse it only to resume an interrupted capture.
+
+```sh
+# Sign in locally and leave the browser open; metadata is stored outside the repository.
+uv run python tools/update_catalog.py --login --capture-dir "$HOME/.cache/yad2-catalog-2026-11-05"
+
+# Resume using the saved session and already captured responses.
+uv run python tools/update_catalog.py --fetch --capture-dir "$HOME/.cache/yad2-catalog-2026-11-05"
+
+# Deterministic offline regeneration from a complete capture.
+uv run python tools/update_catalog.py --capture-dir "$HOME/.cache/yad2-catalog-2026-11-05"
+```
+
+Generation requires a response for every catalog product; explicit empty attribute arrays are valid,
+but missing responses, conflicting labels, and malformed data fail. Only normalized taxonomy metadata
+is checked in under `yad2_client/data/catalog.json`; session state remains in the private data directory.
 
 ### Extending site coverage
 

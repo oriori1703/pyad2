@@ -1,10 +1,13 @@
+import asyncio
 import json
 
 from typer.testing import CliRunner
 
 from yad2_agent.cli import app
-from yad2_client import Settings
+from yad2_client import AttributeFilter, MarketSearch, Settings
+from yad2_client.cache import Cache
 from yad2_client.models import PageSnapshot
+from yad2_client.urls import market_url
 
 
 def test_search_json_from_cache(seeded_cache: PageSnapshot) -> None:
@@ -35,3 +38,37 @@ def test_help_lists_agent_commands() -> None:
     assert result.exit_code == 0
     for command in ("search-url", "get", "categories", "serve", "session", "install-browser"):
         assert command in result.stdout
+
+
+def test_offline_catalog_commands_and_unknown_product_errors(agent_settings: Settings) -> None:
+    products = CliRunner().invoke(app, ["product-types", "--query", "computer"])
+    assert products.exit_code == 0, products.output
+    assert "285" in {product["id"] for product in json.loads(products.stdout)["products"]}
+    attributes = CliRunner().invoke(app, ["attributes", "COMPUTER_COMPONENTS"])
+    assert attributes.exit_code == 0, attributes.output
+    assert "155" in {attribute["id"] for attribute in json.loads(attributes.stdout)["attributes"]}
+    unknown = CliRunner().invoke(app, ["attributes", "unknown"])
+    assert unknown.exit_code == 2
+    assert json.loads(unknown.stderr)["error"]["code"] == "invalid_input"
+    assert not agent_settings.data_dir.exists()
+
+
+def test_named_product_and_attribute_filters_hit_the_correct_cached_url(
+    seeded_cache: PageSnapshot, agent_settings: Settings
+) -> None:
+    url = market_url(
+        MarketSearch(
+            query="RTX",
+            product_types=("285",),
+            attributes=(AttributeFilter(attribute_id="155", values=("13287",)),),
+        )
+    )
+    asyncio.run(Cache(agent_settings.cache_dir).put(url, seeded_cache.model_copy(update={"url": url})))
+    result = CliRunner().invoke(
+        app, ["search", "RTX", "--product-type", "COMPUTER_COMPONENTS", "--attribute", "155=13287"]
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["cached"] is True
+    invalid = CliRunner().invoke(app, ["search", "RTX", "--attribute", "155"])
+    assert invalid.exit_code == 2
+    assert json.loads(invalid.stderr)["error"]["code"] == "invalid_input"

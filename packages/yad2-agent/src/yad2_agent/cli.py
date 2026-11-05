@@ -14,7 +14,9 @@ from yad2_agent.page import PageView, inspect_page
 from yad2_client import MarketSearch, Settings, SortOrder, Yad2Client
 from yad2_client.browser import BrowserTransport
 from yad2_client.cache import Cache
+from yad2_client.catalog import catalog_product, catalog_products, resolve_product_type
 from yad2_client.errors import ChallengeRequired, RateLimited, Yad2Error
+from yad2_client.models import AttributeFilter
 
 app = typer.Typer(no_args_is_help=True, help="Search Yad2 listings. JSON on stdout; errors on stderr.")
 Refresh = Annotated[bool, typer.Option(help="Fetch fresh data instead of using the cache.")]
@@ -48,7 +50,8 @@ def search(
     max_price: Annotated[int | None, typer.Option(min=0)] = None,
     city: Annotated[list[str] | None, typer.Option(help="Yad2 city ID; repeatable.")] = None,
     area: Annotated[list[str] | None, typer.Option(help="Yad2 area ID; repeatable.")] = None,
-    product_type: Annotated[list[str] | None, typer.Option(help="Product type ID; computer parts = 285.")] = None,
+    product_type: Annotated[list[str] | None, typer.Option(help="Product type ID or enum name; repeatable.")] = None,
+    attribute: Annotated[list[str] | None, typer.Option(help="ATTRIBUTE_ID=OPTION_ID[,OPTION_ID]; repeatable.")] = None,
     condition: Annotated[list[str] | None, typer.Option(help="1=packaged new, 2=like new, 3=used; repeatable.")] = None,
     sort: SortOrder = SortOrder.RELEVANCE,
     page: Annotated[int, typer.Option(min=1, max=10000)] = 1,
@@ -64,14 +67,39 @@ def search(
                 max_price=max_price,
                 cities=tuple(city or ()),
                 areas=tuple(area or ()),
-                product_types=tuple(product_type or ()),
+                product_types=tuple(resolve_product_type(value) for value in product_type or ()),
                 conditions=tuple(condition or ()),
+                attributes=tuple(_attribute_filter(value) for value in attribute or ()),
                 sort=sort,
                 page=page,
             ),
             refresh=refresh,
         )
     )
+
+
+def _attribute_filter(value: str) -> AttributeFilter:
+    key, separator, options = value.partition("=")
+    if not separator:
+        raise ValueError("Attribute filters must use ATTRIBUTE_ID=OPTION_ID[,OPTION_ID]")
+    return AttributeFilter(attribute_id=key, values=tuple(options.split(",")))
+
+
+@app.command("product-types")
+def product_types(query: str = "") -> None:
+    """Find product IDs, enum names and bilingual labels in the bundled offline catalog."""
+    typer.echo(catalog_products(query).model_dump_json(indent=2))
+
+
+@app.command("attributes")
+def product_attributes(product_type: str) -> None:
+    """List a product type's attributes and applicable option IDs, entirely offline."""
+    try:
+        result = catalog_product(product_type)
+    except ValueError as exc:
+        _fail(exc)
+    else:
+        typer.echo(result.model_dump_json(indent=2))
 
 
 @app.command("search-url")

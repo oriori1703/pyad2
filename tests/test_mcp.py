@@ -21,10 +21,18 @@ async def test_stdio_round_trip_schemas_structured_results_and_errors(seeded_cac
             "search_url",
             "get_listing",
             "list_categories",
+            "list_product_types",
+            "list_attributes",
             "inspect_page",
         }
         assert all(tool.outputSchema for tool in tools)
         assert all(tool.annotations is not None and tool.annotations.readOnlyHint for tool in tools)
+        products = await session.call_tool("list_product_types", {"query": "computer"})
+        assert not products.isError and products.structuredContent is not None
+        assert "285" in {product["id"] for product in products.structuredContent["products"]}
+        attributes = await session.call_tool("list_attributes", {"product_type": "COMPUTER_COMPONENTS"})
+        assert not attributes.isError and attributes.structuredContent is not None
+        assert "155" in {attribute["id"] for attribute in attributes.structuredContent["attributes"]}
         result = await session.call_tool("search_market", {"search": {"query": "RTX"}})
         assert not result.isError
         assert result.structuredContent is not None
