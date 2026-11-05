@@ -1,0 +1,14 @@
+[project]
+name = "yad2-agent"
+version = "0.1.0"
+description = "Yad2 CLI and MCP tools for LLM agents"
+requires-python = ">=3.11"
+dependencies = ["yad2-client", "typer>=0.16,<1", "mcp>=1.20,<2"]
+
+[project.scripts]
+yad2 = "yad2_agent.cli:app"
+yad2-mcp = "yad2_agent.server:main"
+
+[build-system]
+requires = ["uv_build>=0.8.13,<0.14"]
+build-backend = "uv_build"

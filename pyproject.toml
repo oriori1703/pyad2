@@ -1,0 +1,43 @@
+[project]
+name = "yad2-workspace"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[tool.uv.sources]
+yad2-client = { workspace = true }
+yad2-agent = { workspace = true }
+
+[dependency-groups]
+dev = ["mypy>=1.15", "pytest>=8", "pytest-asyncio>=1", "ruff>=0.11"]
+
+[tool.mypy]
+strict = true
+plugins = ["pydantic.mypy"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+extend-select = ["I", "UP", "B", "ASYNC", "BLE", "C4", "DTZ", "ICN", "PIE", "PTH", "RET", "RUF", "SIM", "TID"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "packages/yad2-client/tests"]
+asyncio_mode = "auto"
+addopts = "-m 'not live'"
+markers = ["live: opt-in tests accessing Yad2 with an installed browser"]
