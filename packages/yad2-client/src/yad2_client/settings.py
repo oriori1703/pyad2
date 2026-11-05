@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Literal
 
 from platformdirs import user_cache_path, user_data_path
 from pydantic import Field
@@ -14,6 +15,7 @@ class Settings(Model):
     cache_dir: Path = Field(default_factory=lambda: user_cache_path("yad2"))
     headless: bool = True
     channel: str = "chromium"
+    transport: Literal["http", "browser"] = "http"
     timeout_seconds: float = Field(default=45, gt=0, le=300)
     min_interval_seconds: float = Field(default=3, ge=0)
     cache_ttl_seconds: float = Field(default=300, ge=0)

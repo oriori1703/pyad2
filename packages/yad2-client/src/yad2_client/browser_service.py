@@ -1,4 +1,4 @@
-"""One private loopback service owns and serializes the browser for CLI and MCP clients."""
+"""One private loopback service serializes HTTP/browser access and session updates for CLI/MCP."""
 
 import hmac
 import os
@@ -13,9 +13,10 @@ from anyio.streams.buffered import BufferedByteReceiveStream
 from filelock import FileLock, Timeout
 from pydantic import TypeAdapter, ValidationError
 
-from yad2_client.browser import BrowserTransport
+from yad2_client.browser import SearchTransport
 from yad2_client.cache import Cache
 from yad2_client.errors import BrowserError, ChallengeRequired, RateLimited, Yad2Error
+from yad2_client.hybrid import HybridTransport
 from yad2_client.models import PageSnapshot
 from yad2_client.session import (
     PROTOCOL_VERSION,
@@ -32,7 +33,8 @@ from yad2_client.urls import validate_url
 
 
 class BrowserSession(Protocol):
-    retry_after: float
+    @property
+    def retry_after(self) -> float: ...
 
     @property
     def running(self) -> bool: ...
@@ -47,7 +49,7 @@ class BrowserSession(Protocol):
 
 
 class BrowserService:
-    def __init__(self, settings: Settings, factory: Callable[[Settings], BrowserSession] = BrowserTransport) -> None:
+    def __init__(self, settings: Settings, factory: Callable[[Settings], BrowserSession] = HybridTransport) -> None:
         self.settings = settings
         self.factory = factory
         self.browser = factory(settings)
@@ -67,6 +69,7 @@ class BrowserService:
                 "pid": os.getpid(),
                 "started_at": self.started_at,
                 "browser_running": self.browser.running,
+                "transport": self.settings.transport,
                 "operation": self.operation,
                 "queued_requests": self.queued,
             }
@@ -114,14 +117,17 @@ class BrowserService:
                     await self.browser.close()
                     self.browser = self.factory(self.settings)
             # Check the shared cooldown only after reaching the front of the queue.
-            await self.cache.wait_turn(self.settings.min_interval_seconds)
+            await self.cache.wait_turn(
+                0 if isinstance(self.browser, HybridTransport) else self.settings.min_interval_seconds
+            )
             try:
                 with anyio.fail_after(3 * self.settings.timeout_seconds):
-                    snapshot = (
-                        await self.browser.fetch_filters(url)
-                        if request.operation == "filters"
-                        else await self.browser.fetch(url)
-                    )
+                    if request.operation == "filters":
+                        snapshot = await self.browser.fetch_filters(url)
+                    elif request.operation == "search" and isinstance(self.browser, SearchTransport):
+                        snapshot = await self.browser.fetch_search(url)
+                    else:
+                        snapshot = await self.browser.fetch(url)
                 return ServiceResponse(snapshot=snapshot)
             except (ChallengeRequired, RateLimited):
                 await self.cache.block(max(self.settings.cooldown_seconds, self.browser.retry_after))
@@ -185,7 +191,7 @@ class BrowserService:
 
 async def serve_browser(
     settings: Settings,
-    factory: Callable[[Settings], BrowserSession] = BrowserTransport,
+    factory: Callable[[Settings], BrowserSession] = HybridTransport,
     *,
     task_status: anyio.abc.TaskStatus[ServiceRecord] = anyio.TASK_STATUS_IGNORED,
 ) -> None:

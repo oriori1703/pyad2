@@ -153,6 +153,7 @@ class SearchFilters(Model):
     attributes: tuple[SearchAttribute, ...]
     min_price: float | None = None
     max_price: float | None = None
+    warnings: tuple[str, ...] = ()
 
 
 class SearchPage(Model):

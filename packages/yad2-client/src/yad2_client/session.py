@@ -9,12 +9,12 @@ import anyio
 from anyio.abc import ByteStream
 from anyio.streams.buffered import BufferedByteReceiveStream
 from filelock import FileLock, Timeout
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from yad2_client.models import Model, PageSnapshot
 from yad2_client.settings import Settings
 
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 
@@ -37,14 +37,15 @@ class BrowserActivity(Model):
     pid: int
     started_at: datetime
     browser_running: bool
-    operation: Literal["fetch", "filters", "verify"] | None = None
+    operation: Literal["fetch", "search", "filters", "verify"] | None = None
+    transport: Literal["http", "browser"] = "browser"
     queued_requests: int = 0
 
 
 class ServiceRequest(Model):
     protocol: int = PROTOCOL_VERSION
     token: str
-    operation: Literal["fetch", "filters", "verify", "status", "stop"]
+    operation: Literal["fetch", "search", "filters", "verify", "status", "stop"]
     url: str = ""
     wait_seconds: float = Field(default=180, ge=1, le=600)
 
@@ -81,12 +82,13 @@ class SessionStatus(Model):
     service: BrowserActivity | None = None
     browser_lock: BrowserLockStatus
     saved_state_exists: bool
+    http_identity_exists: bool = False
     saved_state_updated_at: datetime | None = None
     cache: CacheStatus
     guidance: tuple[str, ...] = ()
 
 
-async def write_private(path: Path, model: Model) -> None:
+async def write_private(path: Path, model: BaseModel) -> None:
     """Create private metadata before writing, then atomically publish it."""
     await anyio.to_thread.run_sync(_write_private, path, model.model_dump_json())
 

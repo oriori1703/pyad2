@@ -162,6 +162,9 @@ class SharedBrowserTransport:
     async def fetch_filters(self, url: str) -> PageSnapshot:
         return await self._request("filters", url)
 
+    async def fetch_search(self, url: str) -> PageSnapshot:
+        return await self._request("search", url)
+
     async def close(self) -> None:
         pass
 
@@ -218,6 +221,11 @@ async def session_status(settings: Settings) -> SessionStatus:
         modified = datetime.fromtimestamp((await path.stat()).st_mtime, UTC)
     except FileNotFoundError:
         modified = None
+    identity_exists = await anyio.Path(settings.data_dir / "http-identity.json").exists()
+    if settings.transport == "http" and (modified is None or not identity_exists):
+        guidance.append(
+            "Initialize or repair the HTTP session with `yad2 session` before uncached marketplace requests."
+        )
     cache = await Cache(settings.cache_dir).status()
     if cache.error:
         guidance.append("The cache could not be read; inspect cache.error before trying another browser request.")
@@ -235,6 +243,7 @@ async def session_status(settings: Settings) -> SessionStatus:
             "service": activity,
             "browser_lock": lock,
             "saved_state_exists": modified is not None,
+            "http_identity_exists": identity_exists,
             "saved_state_updated_at": modified,
             "cache": cache,
             "guidance": tuple(guidance),

@@ -42,4 +42,5 @@ async def seeded_cache(agent_settings: Settings, anyio_backend: str) -> PageSnap
         },
     )
     await Cache(agent_settings.cache_dir).put(snapshot.url, snapshot)
+    await Cache(agent_settings.cache_dir).put(f"search:{snapshot.url}", snapshot)
     return snapshot

@@ -59,6 +59,36 @@ def test_explicit_empty_filters_differ_from_missing_schema(snapshot: PageSnapsho
         parse_filters(snapshot.model_copy(update={"data": {"data": {}}}))
 
 
+def test_conflicting_collection_option_ids_are_preserved_with_warnings(snapshot: PageSnapshot) -> None:
+    payload: dict[str, JsonValue] = {
+        "data": {
+            "productTypes": [
+                {"value": "505764", "text": "מיטות", "count": 4373},
+                {"value": "505764", "text": "ארונות", "count": 1},
+            ],
+            "conditions": [],
+            "cities": [],
+            "price": {"min": 0, "max": 1500},
+            "attributes": [
+                {
+                    "attributeId": 84,
+                    "attributeTextHeb": "סוג שולחן",
+                    "attributeTextEng": "Table type",
+                    "totalOptionsCount": 1,
+                    "options": [
+                        {"value": "11526", "text": "כתיבה/מחשב", "count": 744},
+                        {"value": "11526", "text": "כתיבה", "count": 2},
+                    ],
+                }
+            ],
+        }
+    }
+    result = parse_filters(snapshot.model_copy(update={"data": payload}))
+    assert len(result.warnings) == 2 and len(result.product_types) == 2
+    assert [option.count for option in result.attributes[0].options] == [744, 2]
+    assert not result.attributes[0].options_complete
+
+
 async def test_filter_cache_is_separate_and_bad_shapes_are_not_cached(
     settings: Settings, snapshot: PageSnapshot
 ) -> None:
@@ -137,6 +167,14 @@ async def test_capture_observed_frontend_response_in_one_navigation(
         assert not predicate(Mock(url=endpoint + "?q=RTX"))
         assert not predicate(Mock(url=endpoint + "?q=RTX&productTypes=285&conditions=3"))
         if collection and error is None:
+            response.url = "https://gw.yad2.co.il/recommerce-feed/filters?q=RTX&productTypes=285"
+            fetch.return_value = snapshot.model_copy(
+                update={"url": "https://www.yad2.co.il/market/search?q=RTX&productTypes=285"}
+            )
+            page.expect_response.return_value = pending()
+            redirected = await browser.fetch_filters(snapshot.url)
+            assert "/market/search?" in redirected.url
+            fetch.return_value = snapshot
             response.url = (
                 "https://gw.yad2.co.il/recommerce-feed/filters/" + quote("מחשבים") + "?q=RTX&productTypes=285"
             )

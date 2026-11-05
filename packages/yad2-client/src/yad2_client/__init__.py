@@ -1,7 +1,8 @@
-"""Typed, browser-backed access to Yad2."""
+"""Typed, HTTP-first access to Yad2 with browser session verification."""
 
 from yad2_client.client import Yad2Client
 from yad2_client.enums import Attribute, ProductType
+from yad2_client.http import HttpTransport
 from yad2_client.models import (
     AttributeFilter,
     CategoryResult,
@@ -24,6 +25,7 @@ __all__ = [
     "AttributeFilter",
     "CategoryResult",
     "FilterOption",
+    "HttpTransport",
     "Listing",
     "ListingAttribute",
     "ListingResult",

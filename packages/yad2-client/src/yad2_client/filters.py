@@ -37,9 +37,11 @@ class _Response(BaseModel):
     data: _Filters
 
 
-def _options(values: list[_Option]) -> tuple[FilterOption, ...]:
+def _options(values: list[_Option], group: str, warnings: list[str]) -> tuple[FilterOption, ...]:
     if len({value.value for value in values}) != len(values):
-        raise ParseError("Duplicate live filter option IDs")
+        warnings.append(
+            f"{group} contains repeated option IDs; upstream labels/counts may conflict. Rows are preserved without merging."
+        )
     return tuple(FilterOption(id=value.value, label=value.text, count=value.count) for value in values)
 
 
@@ -50,28 +52,35 @@ def parse_filters(snapshot: PageSnapshot) -> SearchFilters:
         raise ParseError("Unrecognized live filter payload; refusing to report unavailable filters as empty") from exc
     if len({attribute.attributeId for attribute in data.attributes}) != len(data.attributes):
         raise ParseError("Duplicate live filter attribute IDs")
-    if any(len(attribute.options) > attribute.totalOptionsCount for attribute in data.attributes):
+    if any(
+        len({option.value for option in attribute.options}) > attribute.totalOptionsCount
+        for attribute in data.attributes
+    ):
         raise ParseError("Live filter option counts contradict the returned options")
     if data.price.min is not None and data.price.max is not None and data.price.min > data.price.max:
         raise ParseError("Live filter price bounds are reversed")
+    warnings: list[str] = []
     return SearchFilters(
         source_url=snapshot.url,
         fetched_at=snapshot.fetched_at,
         cached=snapshot.cached,
-        product_types=_options(data.productTypes),
-        conditions=_options(data.conditions),
-        cities=_options(data.cities),
+        product_types=_options(data.productTypes, "product_types", warnings),
+        conditions=_options(data.conditions, "conditions", warnings),
+        cities=_options(data.cities, "cities", warnings),
         attributes=tuple(
             SearchAttribute(
                 id=str(attribute.attributeId),
                 label_en=attribute.attributeTextEng,
                 label_he=attribute.attributeTextHeb,
-                options=_options(attribute.options),
+                options=_options(attribute.options, f"attribute {attribute.attributeId}", warnings),
                 total_options=attribute.totalOptionsCount,
-                options_complete=len(attribute.options) == attribute.totalOptionsCount,
+                options_complete=len({option.value for option in attribute.options})
+                == len(attribute.options)
+                == attribute.totalOptionsCount,
             )
             for attribute in data.attributes
         ),
         min_price=data.price.min,
         max_price=data.price.max,
+        warnings=tuple(warnings),
     )

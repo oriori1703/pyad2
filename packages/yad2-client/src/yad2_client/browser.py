@@ -16,6 +16,7 @@ from patchright.async_api import TimeoutError as PlaywrightTimeout
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, ParseError, RateLimited
+from yad2_client.http_state import HttpIdentity
 from yad2_client.models import Link, PageSnapshot
 from yad2_client.session import browser_lock_status, new_owner, write_private
 from yad2_client.settings import Settings
@@ -35,6 +36,11 @@ class Transport(Protocol):
 @runtime_checkable
 class FilterTransport(Protocol):
     async def fetch_filters(self, url: str) -> PageSnapshot: ...
+
+
+@runtime_checkable
+class SearchTransport(Protocol):
+    async def fetch_search(self, url: str) -> PageSnapshot: ...
 
 
 def retry_after_seconds(value: str | None) -> float:
@@ -59,6 +65,7 @@ class BrowserTransport:
         self._page: Page | None = None
         self._profile_lock: FileLock | None = None
         self.retry_after = 0.0
+        self._user_agent: str | None = None
 
     @property
     def state_path(self) -> Path:
@@ -101,6 +108,7 @@ class BrowserTransport:
                 f"Mozilla/5.0 ({platform}) AppleWebKit/537.36 "
                 f"(KHTML, like Gecko) Chrome/{self._browser.version} Safari/537.36"
             )
+            self._user_agent = user_agent
             self._context = await self._browser.new_context(
                 locale="he-IL",
                 user_agent=user_agent,
@@ -120,6 +128,10 @@ class BrowserTransport:
             await self._context.storage_state(path=temporary)
             await anyio.Path(temporary).chmod(0o600)
             await anyio.Path(temporary).replace(self.state_path)
+            if self._user_agent is not None:
+                await write_private(
+                    self.settings.data_dir / "http-identity.json", HttpIdentity(user_agent=self._user_agent)
+                )
 
     async def _snapshot(self, page: Page) -> PageSnapshot:
         url = validate_url(page.url)
@@ -201,7 +213,10 @@ class BrowserTransport:
                 lambda response: (
                     urlsplit(response.url).hostname == "gw.yad2.co.il"
                     and (
-                        urlsplit(response.url).path.startswith(endpoint + "/")
+                        (
+                            urlsplit(response.url).path.startswith(endpoint + "/")
+                            or (bool(parse_qs(parsed.query).get("q")) and urlsplit(response.url).path == endpoint)
+                        )
                         if collection
                         else urlsplit(response.url).path == endpoint
                     )
@@ -219,14 +234,22 @@ class BrowserTransport:
                 raise ChallengeRequired("Live filters require browser verification. Run `yad2 session`.")
             if response.status >= 400:
                 raise PageUnavailable(f"Live filters returned HTTP {response.status}")
-            if urlsplit(snapshot.url).path != parsed.path or filters_query(snapshot.url) != filters_query(url):
+            actual_path = urlsplit(snapshot.url).path
+            redirected_text_search = (
+                collection and bool(parse_qs(parsed.query).get("q")) and actual_path == "/market/search"
+            )
+            if (actual_path != parsed.path and not redirected_text_search) or filters_query(
+                snapshot.url
+            ) != filters_query(url):
                 raise ParseError("Live filters redirected to a different search")
-            if collection:
+            if collection and not redirected_text_search:
                 props = snapshot.data.get("props")
                 page_props = props.get("pageProps") if isinstance(props, dict) else None
                 handle = page_props.get("collectionHebHandle") if isinstance(page_props, dict) else None
                 if not isinstance(handle, str) or unquote(urlsplit(response.url).path) != f"{endpoint}/{handle}":
                     raise ParseError("Live filter collection does not match the page's collection metadata")
+            elif urlsplit(response.url).path != endpoint:
+                raise ParseError("Live filter endpoint does not match the search page")
             return PageSnapshot(url=snapshot.url, fetched_at=datetime.now(UTC), data=_JSON_OBJECT.validate_json(body))
         except (PlaywrightTimeout, ValidationError) as exc:
             raise ParseError("The search frontend did not return recognized live filter data") from exc

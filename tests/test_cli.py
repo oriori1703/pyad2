@@ -97,7 +97,12 @@ def test_named_product_and_attribute_filters_hit_the_correct_cached_url(
             attributes=(AttributeFilter(attribute_id="155", values=("13287",)),),
         )
     )
-    anyio.run(Cache(agent_settings.cache_dir).put, url, seeded_cache.model_copy(update={"url": url}), backend="asyncio")
+    anyio.run(
+        Cache(agent_settings.cache_dir).put,
+        f"search:{url}",
+        seeded_cache.model_copy(update={"url": url}),
+        backend="asyncio",
+    )
     result = CliRunner().invoke(
         app, ["search", "RTX", "--product-type", "COMPUTER_COMPONENTS", "--attribute", "155=13287"]
     )

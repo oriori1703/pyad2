@@ -5,10 +5,11 @@ from typing import Self
 
 import anyio
 
-from yad2_client.browser import BrowserTransport, FilterTransport, Transport
+from yad2_client.browser import BrowserTransport, FilterTransport, SearchTransport, Transport
 from yad2_client.cache import Cache
 from yad2_client.errors import ChallengeRequired, ParseError, RateLimited
 from yad2_client.filters import parse_filters
+from yad2_client.http import HttpTransport
 from yad2_client.models import (
     CategoryResult,
     ListingResult,
@@ -44,24 +45,30 @@ class Yad2Client:
         with anyio.CancelScope(shield=True):
             await self.transport.close()
 
-    async def _load(self, url: str, refresh: bool, *, filters: bool = False) -> PageSnapshot:
-        key = f"filters:{url}" if filters else url
+    async def _load(self, url: str, refresh: bool, *, filters: bool = False, search: bool = False) -> PageSnapshot:
+        key = f"filters:{url}" if filters else f"search:{url}" if search else url
         if not refresh:
             cached = await self.cache.get(key, self.settings.cache_ttl_seconds)
             if cached is not None:
                 return cached
         shared = isinstance(self.transport, SharedBrowserTransport)
         if not shared:
-            await self.cache.wait_turn(self.settings.min_interval_seconds)
+            await self.cache.wait_turn(
+                0 if isinstance(self.transport, HttpTransport) else self.settings.min_interval_seconds
+            )
         try:
             if filters:
                 if not isinstance(self.transport, FilterTransport):
                     raise ParseError("This custom transport does not support live filter discovery")
                 return await self.transport.fetch_filters(url)
+            if search and isinstance(self.transport, SearchTransport):
+                return await self.transport.fetch_search(url)
             return await self.transport.fetch(url)
         except (ChallengeRequired, RateLimited):
             if not shared:
-                retry_after = self.transport.retry_after if isinstance(self.transport, BrowserTransport) else 0
+                retry_after = (
+                    self.transport.retry_after if isinstance(self.transport, (BrowserTransport, HttpTransport)) else 0
+                )
                 await self.cache.block(max(self.settings.cooldown_seconds, retry_after))
             # Release the session lock so `yad2 session` can repair it while an MCP server stays running.
             await self.transport.close()
@@ -100,10 +107,10 @@ class Yad2Client:
         """Read a feed URL, preserving site-specific filters across Yad2 sections."""
         url = validate_url(url)
         async with self._lock:
-            snapshot = await self._load(url, refresh)
+            snapshot = await self._load(url, refresh, search=True)
             result = parse_search(snapshot)
             if not snapshot.cached:
-                await self.cache.put(url, snapshot)
+                await self.cache.put(f"search:{url}", snapshot)
             return result
 
     async def get_listing(self, value: str, *, refresh: bool = False) -> ListingResult:
