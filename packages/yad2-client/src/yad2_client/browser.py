@@ -5,15 +5,15 @@ import sys
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Protocol
-from urllib.parse import urlsplit
+from typing import Protocol, runtime_checkable
+from urllib.parse import parse_qs, unquote, urlsplit
 
 import anyio
 from filelock import FileLock, Timeout
 from patchright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 from patchright.async_api import Error as PlaywrightError
 from patchright.async_api import TimeoutError as PlaywrightTimeout
-from pydantic import JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, ParseError, RateLimited
 from yad2_client.models import Link, PageSnapshot
@@ -30,6 +30,11 @@ class Transport(Protocol):
     async def fetch(self, url: str) -> PageSnapshot: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class FilterTransport(Protocol):
+    async def fetch_filters(self, url: str) -> PageSnapshot: ...
 
 
 def retry_after_seconds(value: str | None) -> float:
@@ -171,6 +176,62 @@ class BrowserTransport:
             return await self._snapshot(page)
         except PlaywrightError as exc:
             raise BrowserError(f"Interactive verification did not complete: {exc}") from exc
+
+    async def fetch_filters(self, url: str) -> PageSnapshot:
+        """Capture the live filters requested by the search frontend during one navigation."""
+        url = validate_url(url)
+        parsed = urlsplit(url)
+        collection = parsed.path.startswith("/market/collections/")
+        if parsed.path != "/market/search" and not collection:
+            raise ValueError("Live filters require a market search or collection URL")
+        endpoint = "/recommerce-feed/filters"
+
+        def filters_query(value: str) -> dict[str, list[str]]:
+            # The observed frontend forwards these filters, but omits pageNumber.
+            keys = {"q", "areas", "cities", "conditions", "minPrice", "maxPrice", "productTypes"}
+            return {
+                key: values
+                for key, values in parse_qs(urlsplit(value).query).items()
+                if key in keys or key.startswith("attr_")
+            }
+
+        try:
+            page = await self._start()
+            async with page.expect_response(
+                lambda response: (
+                    urlsplit(response.url).hostname == "gw.yad2.co.il"
+                    and (
+                        urlsplit(response.url).path.startswith(endpoint + "/")
+                        if collection
+                        else urlsplit(response.url).path == endpoint
+                    )
+                    and filters_query(response.url) == filters_query(url)
+                ),
+                timeout=self.settings.timeout_seconds * 1000,
+            ) as pending:
+                snapshot = await self.fetch(url)
+            response = await pending.value
+            if response.status == 429:
+                self.retry_after = retry_after_seconds(response.headers.get("retry-after"))
+                raise RateLimited("Live filters returned HTTP 429; requests paused.")
+            body = await response.text()
+            if response.status in {401, 403} or any(marker in body.casefold() for marker in _CHALLENGE_MARKERS):
+                raise ChallengeRequired("Live filters require browser verification. Run `yad2 session`.")
+            if response.status >= 400:
+                raise PageUnavailable(f"Live filters returned HTTP {response.status}")
+            if urlsplit(snapshot.url).path != parsed.path or filters_query(snapshot.url) != filters_query(url):
+                raise ParseError("Live filters redirected to a different search")
+            if collection:
+                props = snapshot.data.get("props")
+                page_props = props.get("pageProps") if isinstance(props, dict) else None
+                handle = page_props.get("collectionHebHandle") if isinstance(page_props, dict) else None
+                if not isinstance(handle, str) or unquote(urlsplit(response.url).path) != f"{endpoint}/{handle}":
+                    raise ParseError("Live filter collection does not match the page's collection metadata")
+            return PageSnapshot(url=snapshot.url, fetched_at=datetime.now(UTC), data=_JSON_OBJECT.validate_json(body))
+        except (PlaywrightTimeout, ValidationError) as exc:
+            raise ParseError("The search frontend did not return recognized live filter data") from exc
+        except PlaywrightError as exc:
+            raise BrowserError(f"Live filter capture failed: {exc}") from exc
 
     async def close(self) -> None:
         with anyio.CancelScope(shield=True):

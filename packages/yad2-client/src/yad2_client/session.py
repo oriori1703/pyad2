@@ -14,7 +14,7 @@ from pydantic import Field
 from yad2_client.models import Model, PageSnapshot
 from yad2_client.settings import Settings
 
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 
@@ -37,14 +37,14 @@ class BrowserActivity(Model):
     pid: int
     started_at: datetime
     browser_running: bool
-    operation: Literal["fetch", "verify"] | None = None
+    operation: Literal["fetch", "filters", "verify"] | None = None
     queued_requests: int = 0
 
 
 class ServiceRequest(Model):
     protocol: int = PROTOCOL_VERSION
     token: str
-    operation: Literal["fetch", "verify", "status", "stop"]
+    operation: Literal["fetch", "filters", "verify", "status", "stop"]
     url: str = ""
     wait_seconds: float = Field(default=180, ge=1, le=600)
 

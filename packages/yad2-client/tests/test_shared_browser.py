@@ -22,6 +22,7 @@ class FakeBrowser:
         self.snapshot = snapshot
         self.running = False
         self.calls = 0
+        self.filter_calls = 0
         self.active = 0
         self.max_active = 0
         self.closed = 0
@@ -46,6 +47,10 @@ class FakeBrowser:
             self.active -= 1
 
     async def interactive(self, url: str, wait_seconds: float) -> PageSnapshot:
+        return await self.fetch(url)
+
+    async def fetch_filters(self, url: str) -> PageSnapshot:
+        self.filter_calls += 1
         return await self.fetch(url)
 
     async def close(self) -> None:
@@ -135,6 +140,24 @@ async def test_status_reports_direct_owner_and_state_metadata_without_credential
         assert status.guidance
     # Stale metadata cannot make an unlocked session appear occupied.
     assert not (await session_status(settings)).browser_lock.locked
+
+
+async def test_filter_rpc_uses_shared_service_and_persists_challenge_cooldown(
+    settings: Settings, snapshot: PageSnapshot
+) -> None:
+    browser = FakeBrowser(snapshot)
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            await tasks.start(serve_browser, settings, lambda _: browser)
+            transport = SharedBrowserTransport(settings)
+            assert (await transport.fetch_filters(snapshot.url)).data == snapshot.data
+            browser.error = ChallengeRequired("Verify filters")
+            with pytest.raises(ChallengeRequired):
+                await transport.fetch_filters(snapshot.url)
+            with pytest.raises(RateLimited):
+                await transport.fetch(snapshot.url)
+            assert browser.filter_calls == 2 and browser.calls == 2
+            assert await stop_service(settings)
 
 
 async def test_status_preserves_an_unreadable_cache_and_reports_unknown_budget(settings: Settings) -> None:

@@ -39,6 +39,8 @@ class BrowserSession(Protocol):
 
     async def fetch(self, url: str) -> PageSnapshot: ...
 
+    async def fetch_filters(self, url: str) -> PageSnapshot: ...
+
     async def interactive(self, url: str, wait_seconds: float) -> PageSnapshot: ...
 
     async def close(self) -> None: ...
@@ -115,7 +117,11 @@ class BrowserService:
             await self.cache.wait_turn(self.settings.min_interval_seconds)
             try:
                 with anyio.fail_after(3 * self.settings.timeout_seconds):
-                    snapshot = await self.browser.fetch(url)
+                    snapshot = (
+                        await self.browser.fetch_filters(url)
+                        if request.operation == "filters"
+                        else await self.browser.fetch(url)
+                    )
                 return ServiceResponse(snapshot=snapshot)
             except (ChallengeRequired, RateLimited):
                 await self.cache.block(max(self.settings.cooldown_seconds, self.browser.retry_after))

@@ -5,10 +5,20 @@ from typing import Self
 
 import anyio
 
-from yad2_client.browser import BrowserTransport, Transport
+from yad2_client.browser import BrowserTransport, FilterTransport, Transport
 from yad2_client.cache import Cache
 from yad2_client.errors import ChallengeRequired, ParseError, RateLimited
-from yad2_client.models import CategoryResult, ListingResult, MarketSearch, PageSnapshot, SearchResult
+from yad2_client.filters import parse_filters
+from yad2_client.models import (
+    CategoryResult,
+    ListingResult,
+    MarketSearch,
+    PageSnapshot,
+    SearchBatch,
+    SearchFilters,
+    SearchResult,
+)
+from yad2_client.pagination import collect_pages
 from yad2_client.parsing import parse_categories, parse_item, parse_search
 from yad2_client.settings import Settings
 from yad2_client.shared_browser import SharedBrowserTransport
@@ -34,15 +44,20 @@ class Yad2Client:
         with anyio.CancelScope(shield=True):
             await self.transport.close()
 
-    async def _load(self, url: str, refresh: bool) -> PageSnapshot:
+    async def _load(self, url: str, refresh: bool, *, filters: bool = False) -> PageSnapshot:
+        key = f"filters:{url}" if filters else url
         if not refresh:
-            cached = await self.cache.get(url, self.settings.cache_ttl_seconds)
+            cached = await self.cache.get(key, self.settings.cache_ttl_seconds)
             if cached is not None:
                 return cached
         shared = isinstance(self.transport, SharedBrowserTransport)
         if not shared:
             await self.cache.wait_turn(self.settings.min_interval_seconds)
         try:
+            if filters:
+                if not isinstance(self.transport, FilterTransport):
+                    raise ParseError("This custom transport does not support live filter discovery")
+                return await self.transport.fetch_filters(url)
             return await self.transport.fetch(url)
         except (ChallengeRequired, RateLimited):
             if not shared:
@@ -55,6 +70,31 @@ class Yad2Client:
     async def search(self, search: MarketSearch, *, refresh: bool = False) -> SearchResult:
         """Search all market categories, one upstream page at a time."""
         return await self.search_url(market_url(search), refresh=refresh)
+
+    async def filters(self, search: MarketSearch, *, refresh: bool = False) -> SearchFilters:
+        """Discover options represented by this search; counts and availability are query-specific."""
+        if not search.query.strip() and not search.collection:
+            raise ValueError("Live filter discovery requires a query or a collection")
+        url = market_url(search)
+        async with self._lock:
+            snapshot = await self._load(url, refresh, filters=True)
+            result = parse_filters(snapshot)
+            if not snapshot.cached:
+                await self.cache.put(f"filters:{url}", snapshot)
+            return result
+
+    async def search_pages(
+        self, search: MarketSearch, *, max_pages: int = 3, max_items: int = 250, refresh: bool = False
+    ) -> SearchBatch:
+        return await self.search_url_pages(
+            market_url(search), max_pages=max_pages, max_items=max_items, refresh=refresh
+        )
+
+    async def search_url_pages(
+        self, url: str, *, max_pages: int = 3, max_items: int = 250, refresh: bool = False
+    ) -> SearchBatch:
+        """Read pages sequentially, deduplicate by URL, and report coverage conservatively."""
+        return await collect_pages(self.search_url, url, max_pages=max_pages, max_items=max_items, refresh=refresh)
 
     async def search_url(self, url: str, *, refresh: bool = False) -> SearchResult:
         """Read a feed URL, preserving site-specific filters across Yad2 sections."""

@@ -64,7 +64,9 @@ async def _existing(settings: Settings) -> ServiceRecord | None:
         return None
     try:
         with anyio.fail_after(2):
-            response = await _exchange(record, ServiceRequest(token=record.token, operation="status"))
+            response = await _exchange(
+                record, ServiceRequest(protocol=record.protocol, token=record.token, operation="status")
+            )
     except _CONNECTION_ERRORS:
         return None
     _check_response(response)
@@ -157,6 +159,9 @@ class SharedBrowserTransport:
     async def interactive(self, url: str, wait_seconds: float) -> PageSnapshot:
         return await self._request("verify", url, wait_seconds)
 
+    async def fetch_filters(self, url: str) -> PageSnapshot:
+        return await self._request("filters", url)
+
     async def close(self) -> None:
         pass
 
@@ -167,7 +172,9 @@ async def stop_service(settings: Settings) -> bool:
         return False
     try:
         with anyio.fail_after(5):
-            _check_response(await _exchange(record, ServiceRequest(token=record.token, operation="stop")))
+            _check_response(
+                await _exchange(record, ServiceRequest(protocol=record.protocol, token=record.token, operation="stop"))
+            )
     except _CONNECTION_ERRORS as exc:
         raise BrowserError("Browser service is unreachable. Run `yad2 status` to inspect the owner.") from exc
     try:
@@ -193,7 +200,9 @@ async def session_status(settings: Settings) -> SessionStatus:
         try:
             with anyio.fail_after(2):
                 response = _check_response(
-                    await _exchange(record, ServiceRequest(token=record.token, operation="status"))
+                    await _exchange(
+                        record, ServiceRequest(protocol=record.protocol, token=record.token, operation="status")
+                    )
                 )
             activity = response.activity
             state = "running"
