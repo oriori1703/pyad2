@@ -273,6 +273,63 @@ async def test_wrong_page_and_wrong_collection_are_schema_errors(http_settings: 
         await transport.fetch_search(market_url(MarketSearch(collection="furniture")))
 
 
+@pytest.mark.parametrize("page", [1, 2])
+async def test_explicit_zero_match_feed_retains_requested_page_and_is_cached(
+    http_settings: Settings, page: int
+) -> None:
+    calls = 0
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        nonlocal calls
+        calls += 1
+        # Observed for q=pinstrop: page 0 denotes a genuinely empty result set.
+        return httpx2.Response(
+            200,
+            json={
+                "data": {
+                    "items": [],
+                    "currentPage": 0,
+                    "totalItems": 0,
+                    "totalPages": 0,
+                }
+            },
+        )
+
+    async with Yad2Client(
+        http_settings, transport=HttpTransport(http_settings, transport=httpx2.MockTransport(respond))
+    ) as client:
+        search = MarketSearch(query="pinstrop", page=page)
+        result = await client.search(search)
+        assert result.listings == () and result.page == page and result.total == result.total_pages == 0
+        batch = await client.search_pages(search, max_pages=3)
+        assert batch.stop_reason == "exhausted" and batch.complete == (page == 1)
+        assert len(batch.pages) == 1 and batch.pages[0].cached and not batch.warnings
+        assert calls == 1
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"currentPage": None},
+        {"currentPage": False},
+        {"totalItems": False},
+        {"totalItems": 1},
+        {"totalPages": 1},
+        {"items": [{"id": 1, "title": "Unexpected"}]},
+    ],
+)
+async def test_zero_page_exception_rejects_incomplete_or_conflicting_feeds(
+    http_settings: Settings, changes: dict[str, object]
+) -> None:
+    data: dict[str, object] = {"items": [], "currentPage": 0, "totalItems": 0, "totalPages": 0}
+    data.update(changes)
+    transport = HttpTransport(
+        http_settings, transport=httpx2.MockTransport(lambda _: httpx2.Response(200, json={"data": data}))
+    )
+    with pytest.raises(ParseError):
+        await transport.fetch_search(market_url(MarketSearch(query="pinstrop")))
+
+
 def test_html_parser_preserves_raw_payload_and_rejects_missing_or_malformed_data(snapshot: PageSnapshot) -> None:
     body = '<script id="__NEXT_DATA__" type="application/json">' + json.dumps(snapshot.data) + "</script>"
     parsed = html_snapshot(snapshot.url, body)

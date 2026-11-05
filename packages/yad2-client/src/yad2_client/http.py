@@ -231,10 +231,22 @@ class HttpTransport:
             if filters:
                 parse_filters(snapshot)
             else:
-                current_page = obj(payload.get("data")).get("currentPage")
-                if type(current_page) is not int or current_page != int(page):
+                feed = obj(payload.get("data"))
+                result = parse_search(snapshot)
+                # Observed zero-match API feeds use page 0 and explicit zero totals.
+                # The shared parser retains the requested page in the public result.
+                empty_feed = (
+                    feed.get("items") == []
+                    and not result.listings
+                    and not result.warnings
+                    and all(
+                        type(feed.get(key)) is int and feed[key] == 0
+                        for key in ("currentPage", "totalItems", "totalPages")
+                    )
+                )
+                current_page = feed.get("currentPage")
+                if not empty_feed and (type(current_page) is not int or current_page != int(page)):
                     raise ParseError("HTTP feed returned a different page than requested or omitted its page number")
-                parse_search(snapshot)
             return snapshot
 
     async def fetch_search(self, url: str) -> PageSnapshot:
