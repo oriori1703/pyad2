@@ -1,11 +1,13 @@
 from unittest.mock import AsyncMock, Mock, patch
 
+import anyio
 import pytest
+from filelock import FileLock, Timeout
 from patchright.async_api import TimeoutError as PlaywrightTimeout
 
 from yad2_client import Settings
 from yad2_client.browser import BrowserTransport, retry_after_seconds
-from yad2_client.errors import ChallengeRequired, PageUnavailable, RateLimited
+from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, RateLimited
 
 
 @pytest.mark.parametrize(
@@ -39,3 +41,18 @@ def test_retry_after_invalid_values() -> None:
     assert retry_after_seconds("invalid") == 0
     assert retry_after_seconds("120") == 120
     assert retry_after_seconds("-1") == 0
+
+
+async def test_busy_browser_session_preserves_ownership(settings: Settings) -> None:
+    await anyio.Path(settings.data_dir).mkdir(parents=True)
+    path = settings.data_dir / "browser.lock"
+    transport = BrowserTransport(settings)
+    with FileLock(path, timeout=0):
+        with pytest.raises(BrowserError, match="session is in use"):
+            await transport._start()
+        await transport.close()
+        # A rejected contender must not release the original owner's lock.
+        with pytest.raises(Timeout), FileLock(path, timeout=0):
+            pytest.fail("The original session lost its lock")
+    with FileLock(path, timeout=0) as acquired:
+        assert acquired.is_locked

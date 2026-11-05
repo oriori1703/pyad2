@@ -5,8 +5,8 @@ from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from typing import Annotated, TypeVar
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
@@ -27,17 +27,17 @@ async def _call(operation: Awaitable[T]) -> T:
         raise ToolError(json.dumps({"code": code, "message": str(exc)}, ensure_ascii=False)) from exc
 
 
-def create_server(client: Yad2Client | None = None) -> FastMCP[None]:
+def create_server(client: Yad2Client | None = None) -> MCPServer[None]:
     client = client or Yad2Client()
 
     @asynccontextmanager
-    async def lifespan(server: FastMCP[None]) -> AsyncIterator[None]:
+    async def lifespan(server: MCPServer[None]) -> AsyncIterator[None]:
         try:
             yield None
         finally:
             await client.close()
 
-    server = FastMCP(
+    server = MCPServer(
         "yad2",
         instructions=(
             "Search Yad2 public listings. Prefer search_market for used goods, get_listing for details, "
@@ -51,8 +51,8 @@ def create_server(client: Yad2Client | None = None) -> FastMCP[None]:
         ),
         lifespan=lifespan,
     )
-    read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True)
-    offline = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    read_only = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=True)
+    offline = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 
     @server.tool(annotations=offline)
     def list_product_types(query: str = "") -> CatalogProducts:

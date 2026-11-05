@@ -25,20 +25,20 @@ async def test_stdio_round_trip_schemas_structured_results_and_errors(seeded_cac
             "list_attributes",
             "inspect_page",
         }
-        assert all(tool.outputSchema for tool in tools)
-        assert all(tool.annotations is not None and tool.annotations.readOnlyHint for tool in tools)
+        assert all(tool.output_schema for tool in tools)
+        assert all(tool.annotations is not None and tool.annotations.read_only_hint for tool in tools)
         products = await session.call_tool("list_product_types", {"query": "computer"})
-        assert not products.isError and products.structuredContent is not None
-        assert "285" in {product["id"] for product in products.structuredContent["products"]}
+        assert not products.is_error and products.structured_content is not None
+        assert "285" in {product["id"] for product in products.structured_content["products"]}
         attributes = await session.call_tool("list_attributes", {"product_type": "COMPUTER_COMPONENTS"})
-        assert not attributes.isError and attributes.structuredContent is not None
-        assert "155" in {attribute["id"] for attribute in attributes.structuredContent["attributes"]}
+        assert not attributes.is_error and attributes.structured_content is not None
+        assert "155" in {attribute["id"] for attribute in attributes.structured_content["attributes"]}
         result = await session.call_tool("search_market", {"search": {"query": "RTX"}})
-        assert not result.isError
-        assert result.structuredContent is not None
-        assert result.structuredContent["listings"][0]["id"] == "123"
-        assert result.structuredContent["cached"] is True
+        assert not result.is_error
+        assert result.structured_content is not None
+        assert result.structured_content["listings"][0]["id"] == "123"
+        assert result.structured_content["cached"] is True
         failure = await session.call_tool("get_listing", {"id_or_url": "https://example.com/"})
-        assert failure.isError
+        assert failure.is_error
         invalid = await session.call_tool("search_market", {"search": {"page": 0}})
-        assert invalid.isError
+        assert invalid.is_error
