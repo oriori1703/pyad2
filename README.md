@@ -1,8 +1,8 @@
 # Yad2 client, CLI & MCP
 
 A Python `uv` workspace for agents searching Yad2, with first-class support for second-hand furniture,
-computer parts, and **all marketplace categories**. Browser-backed access extracts structured page data
-instead of scraping listing text or guessing private API endpoints.
+computer parts, and **all marketplace categories**. HTTP-first access uses verified JSON endpoints and
+structured page data, with Chromium for session verification and browser-only pages.
 
 - **`yad2-client`** — asynchronous, typed library; independently usable without MCP or Typer.
 - **`yad2-agent`** — JSON CLI and MCP stdio server built on the library.
@@ -16,6 +16,7 @@ Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
 ```sh
 uv sync --locked --all-packages
 uv run yad2 install-browser
+uv run yad2 session  # Initialize saved cookies and the matching HTTP user agent once.
 
 # The example listing (a numeric market ID works too)
 uv run yad2 get https://www.yad2.co.il/market/item/15405193887804
@@ -23,8 +24,9 @@ uv run yad2 get https://www.yad2.co.il/market/item/15405193887804
 # Used/like-new graphics cards under ₪2,000
 uv run yad2 search RTX --product-type 285 --condition 2 --condition 3 --max-price 2000 --sort priceAsc
 
-# Furniture: text, collection, price and city filters
-uv run yad2 search 'ספה' --collection furniture --max-price 1500 --city 5000
+# Furniture: a text search, or a filtered collection
+uv run yad2 search 'ספה' --max-price 1500 --city 5000
+uv run yad2 search --collection furniture --max-price 1500 --city 5000
 
 # Discover live collection slugs
 uv run yad2 categories --query computer
@@ -61,6 +63,9 @@ product type `285`; use returned `product_type_id` and `city_id` fields or the s
 other IDs. `--city`, `--area`, `--condition`, `--product-type`, and `--attribute` are repeatable.
 Product types accept numeric IDs, enum names, or exact English/Hebrew labels in the CLI.
 Attribute filters use `ATTRIBUTE_ID=OPTION_ID[,OPTION_ID]`; combine multiple options for one attribute.
+Use a text query **or** a collection: observed collection URLs containing `q` redirect to global search.
+Those combinations retain browser routing; bounded scans reject a changed feed rather than claiming
+collection-specific coverage.
 
 Successful commands emit UTF-8 JSON on stdout. Single-page results include `source_url`, `fetched_at`, and
 `cached`; search results also include `total`, `page`, `total_pages`, `next_url`, and parser `warnings`. Missing
@@ -68,12 +73,14 @@ prices remain `null`; a listed price of zero stays zero. No phone-reveal action 
 
 ### Live filters and bounded searches
 
-`filters` captures the frontend's filter response during one navigation, with the same cache, pacing,
+`filters` reads the verified frontend filter endpoint over HTTP, with the same cache, pacing,
 and challenge handling as searches. Supply a query or collection. `--search-json` accepts a complete
 `MarketSearch` object and replaces the simpler arguments. Returned product types, conditions, cities,
 price bounds, and attribute options reflect that search. Each attribute reports `total_options` and
 `options_complete`: the frontend may return only a subset. The offline publishing taxonomy remains
 useful for broader discovery but does not imply that every option is currently searchable.
+Some collection filters contain repeated IDs with conflicting labels/counts. Those rows remain intact,
+`warnings` identifies affected groups, and affected attribute option lists are not marked complete.
 
 `search` and `search-url` preserve their single-page output with default limits. Changing `--max-pages`
 (1–20) or `--max-items` (1–1,000) returns a `SearchBatch`: unique listings, per-page provenance, duplicate
@@ -150,38 +157,57 @@ are read-only; `save_watch`, `check_watch`, and `delete_watch` mutate local stat
 }
 ```
 
-A local service owns one lazy browser session shared by CLI and MCP processes. It serializes navigation
+A local service coordinates HTTP and browser access shared by CLI and MCP processes. It serializes requests
 and enforces pacing and cooldown at the front of its request queue. Each client coalesces concurrent
 identical requests through the shared disk cache. Listing descriptions remain untrusted seller content.
 
-## Browser access and blocking
+## HTTP-first access and verification
 
-Plain HTTP requests currently encounter Yad2's Radware verification. This implementation uses Patchright
-with Chromium, a matching browser-version user agent, Hebrew locale, and persisted cookies/local storage.
-It allows normal browser verification to finish and extracts `__NEXT_DATA__`.
+The default `YAD2_TRANSPORT=http` uses **HTTPX2** and a saved browser session. Marketplace searches and
+filters read the observed `recommerce-feed` APIs; listing details and raw marketplace inspection read
+`__NEXT_DATA__` from HTML. Ordinary supported reads run with **no Chromium process open**. Collection
+handles are resolved from the collection's own HTML metadata, then reused for the service lifetime.
+Searches include the frontend's timestamp-shaped `scrollSessionId` and explicit page number.
+
+Cookies, their scope/expiry, and the browser user agent are reused across processes. Successful HTTP
+responses persist cookie updates atomically while preserving browser local storage. HTTP and browser
+operations share the exclusive session lock, queue, request budget, and cooldown. API search snapshots
+use a separate cache namespace so `inspect_page` still returns the original page data.
+
+Chromium remains available for verification, client-rendered category navigation, property/vehicle
+pages, and unsupported marketplace URL parameters. Routing is decided before a request: an HTTP
+challenge or parse error is **not** retried through Chromium. HTTP redirects are reported explicitly;
+the client does not forward session credentials to arbitrary redirect targets.
+
+To force the previous browser-based behavior, stop the service and configure all clients consistently:
+
+```sh
+uv run yad2 browser-stop
+YAD2_TRANSPORT=browser uv run yad2 search RTX
+```
 
 To reduce repeated challenges:
 
-- Reuse a browser context and its saved session between invocations.
+- Reuse the saved session and matching HTTP identity between invocations.
 - Cache successful reads for five minutes, with a 1,000-page disk-cache bound.
-- Space page navigations at least three seconds apart, including across processes sharing the cache.
+- Space HTTP requests and browser navigations at least three seconds apart, including across processes.
 - On a challenge or HTTP 429, stop immediately and persist a five-minute cooldown, extended by `Retry-After`.
 - Keep cached results available during cooldown. `--refresh` and `cache-clear` do not bypass it.
 
-If verification needs interaction:
+For first-time setup, an older saved session without HTTP identity metadata, or expired verification:
 
 ```sh
 uv run yad2 session
 ```
 
 A visible browser opens for up to three minutes. Complete verification there; a successful page load saves
-the session and clears the cooldown. Verification uses the same service queue: it closes the headless
-browser, opens a visible one, and restores normal browsing afterward. MCP can remain connected.
+the cookies and matching user agent and clears the cooldown. Verification uses the same service queue
+and closes Chromium afterward. MCP can remain connected; subsequent HTTP reads reload the saved state.
 
 ### Shared browser and diagnostics
 
 CLI commands and MCP automatically connect to one local service per `YAD2_DATA_DIR`. The first uncached
-browser request starts it; closing a CLI client or MCP connection leaves it available for other clients.
+network request starts it; closing a CLI client or MCP connection leaves it available for other clients.
 After five minutes without requests it closes the browser and exits. Cached/offline operations do not
 start it. The service listens only on loopback and authenticates requests using a private local token.
 
@@ -189,23 +215,26 @@ start it. The service listens only on loopback and authenticates requests using 
 # Inspect ownership and cooldown without starting a service or navigating Yad2.
 uv run yad2 status
 
-# Stop the service once its requests have finished; the next browser request starts it again.
+# Stop the service once its requests have finished; the next network request starts it again.
 uv run yad2 browser-stop
 ```
 
-`status` returns JSON with the service PID, current operation, queue length, actual browser-lock owner,
-saved-state timestamp, cached-page count, and remaining cooldown. Credentials and cookies are omitted.
+`status` returns JSON with the service PID, configured transport, actual `browser_running` state, current
+operation, queue length, session-lock owner, HTTP identity presence, saved-state timestamp, cache count,
+and remaining cooldown. The historical `browser_lock` field also covers HTTP cookie-state access.
+Credentials and cookies are omitted; HTTP identity presence does not establish session validity.
 Saved-state presence does not assert that an account login is still valid. Ordinary public searches do
 not require account login; a complete taxonomy refresh does.
 
 **Upgrading an already running MCP server:** restart it to load the new tools. Run `uv run yad2 browser-stop`
-to stop any older service; the next uncached request starts the updated protocol with live filter support.
+to stop any older service; the next uncached request starts the updated HTTP-first protocol. Run
+`uv run yad2 session` once if `status` reports missing HTTP identity metadata.
 An older process or a direct catalog capture can still own the exclusive browser lock; `status` identifies
 this situation. Finish that operation before using the shared service. When changing service settings,
 run `browser-stop` first. Startup diagnostics are in `browser-service.log` in the private data directory.
 
 Clients wait up to two minutes in the queue. A lost service connection is reported without replaying a
-browser request. After a service crash, a subsequent command can start a new service using the saved state.
+network request. After a service crash, a subsequent command can start a new service using the saved state.
 
 No method guarantees permanent access: Yad2 can change its challenges, page schemas, or availability.
 Challenges are errors, never disguised as empty search results. There are no automatic retry loops.
@@ -216,17 +245,18 @@ Constructor settings and equivalent environment variables:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
+| `YAD2_TRANSPORT` | `http` | HTTP-first marketplace access; `browser` forces browser-backed reads |
 | `YAD2_HEADLESS` | `true` | Set `false` to make regular browsing visible |
 | `YAD2_CHANNEL` | `chromium` | Patchright browser channel; `chrome` uses an installed Chrome |
 | `YAD2_DATA_DIR` | OS user-data directory / `yad2` | Browser session state, ownership lock, and saved searches |
 | `YAD2_CACHE_DIR` | OS user-cache directory / `yad2` | SQLite cache and request budget |
-| `YAD2_TIMEOUT_SECONDS` | `45` | Browser navigation/readiness timeout |
-| `YAD2_MIN_INTERVAL_SECONDS` | `3` | Minimum spacing between page navigations |
+| `YAD2_TIMEOUT_SECONDS` | `45` | HTTP request and browser navigation/readiness timeout |
+| `YAD2_MIN_INTERVAL_SECONDS` | `3` | Minimum spacing between HTTP requests or browser navigations |
 | `YAD2_CACHE_TTL_SECONDS` | `300` | Cache freshness; `0` disables cache reads |
 | `YAD2_COOLDOWN_SECONDS` | `300` | Minimum cooldown after a block |
 | `YAD2_SERVICE_IDLE_SECONDS` | `300` | Idle time before the shared browser service exits |
 | `YAD2_SERVICE_START_TIMEOUT_SECONDS` | `20` | Maximum wait for local service startup |
-| `YAD2_BROWSER_QUEUE_TIMEOUT_SECONDS` | `120` | Maximum wait for another browser operation to finish |
+| `YAD2_BROWSER_QUEUE_TIMEOUT_SECONDS` | `120` | Maximum wait for another shared HTTP/browser operation to finish |
 
 State is outside the repository. Browser state files are saved with owner-only permissions. On macOS,
 default state is under `~/Library/Application Support/yad2` and cache under `~/Library/Caches/yad2`.
@@ -268,6 +298,9 @@ from agent → client, never the reverse.
 The default transport uses the shared service. For explicit in-process ownership, inject
 `BrowserTransport(settings)` from `yad2_client.browser` and close the client when finished; this mode
 holds the exclusive browser lock and is intended for standalone browser workflows.
+An injected `HttpTransport(settings)` from `yad2_client` provides direct HTTP-only access with a previously
+initialized session. Use it through `Yad2Client` for parsing, caching, and persistent challenge cooldown;
+the shared default is preferred when CLI/MCP or multiple clients may run concurrently.
 
 Async orchestration uses AnyIO, including task groups, locks, worker threads, and filesystem access.
 Use AnyIO's `asyncio` backend for browser-backed operations because Patchright requires it. The test
@@ -381,13 +414,17 @@ uv run pytest -m live tests/test_live.py
 
 Offline tests cover URL/filter validation, observed payload shapes, missing/malformed data, pagination,
 cache persistence/expiry, pacing, challenge cooldown, attribute normalization, saved-search concurrency,
-CLI output, and a real MCP stdio subprocess round trip. Live-filter capture uses observed payloads and
-frontend metadata in offline tests; the new four-feature workflow has not been live-smoke-tested.
+CLI output, cookie scope/persistence, HTTP cancellation, cross-client session updates, and a real MCP
+stdio subprocess round trip. Saved-search comparisons and conflict handling are tested offline.
 CI runs offline checks only. The live example test may eventually fail when the listing expires.
 
 Live-verified on **2026-11-05**: the supplied item (NVIDIA 5070 ti, ₪3,500, Tel Aviv–Yafo), RTX searches,
 price/product-type filtering, second-page navigation, furniture searches, category discovery, and
 property/vehicle feed payloads. This records an observation, not a guarantee of future availability.
+HTTP-first validation on the same date covered filtered hardware searches, listing attributes, furniture
+filters (including conflicting upstream IDs), two-page hardware and furniture scans (42 unique listings
+each), and fresh CLI/MCP requests sharing a restarted service with `browser_running: false`. Session
+reuse across processes is verified; long-term cookie lifetime remains dependent on Yad2 verification.
 
 ## Inspiration
 

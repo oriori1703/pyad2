@@ -1,9 +1,12 @@
 # yad2-client
 
-Async browser-backed Yad2 library. Public entry points: `Yad2Client`, `Settings`, `MarketSearch`, `SortOrder`,
-and typed result models. The default transport shares an automatically started local browser service
-across processes; it expires after five idle minutes. An injected `BrowserTransport` provides exclusive
-in-process ownership and releases browser resources when the client context exits.
+Async HTTP-first Yad2 library. Public entry points: `Yad2Client`, `Settings`, `MarketSearch`, `SortOrder`,
+`HttpTransport`, and typed result models. The default transport shares an automatically started local
+HTTP/browser service across processes; it expires after five idle minutes. HTTPX2 reuses verified browser
+cookies and a matching user agent for marketplace APIs and listing HTML without keeping Chromium open.
+Run `yad2 session` once to initialize the session; challenges require explicit verification.
+`Settings(transport="browser")` forces browser reads. An injected `BrowserTransport` provides exclusive
+in-process browser ownership; `HttpTransport` provides HTTP-only access through `Yad2Client`.
 
 `search` handles all market collections; `search_url` and `get_listing` support observed marketplace,
 real-estate and vehicle schemas. `page` exposes raw `PageSnapshot` data for custom adapters. `categories`

@@ -1,4 +1,4 @@
-"""MCP stdio server. The lifespan owns one lazily started browser session."""
+"""MCP stdio server backed by the shared HTTP/browser service."""
 
 import json
 from collections.abc import AsyncIterator, Awaitable
@@ -58,6 +58,7 @@ def create_server(client: Yad2Client | None = None) -> MCPServer[None]:
             "On challenge_required, ask the user to run `yad2 session`; do not loop retries. "
             "Use get_session_status for local browser ownership and cooldown diagnostics. "
             "Cached results include their fetch time; use refresh only when current data is necessary."
+            " Marketplace reads are HTTP-first; session verification and unsupported pages use Chromium."
         ),
         lifespan=lifespan,
     )
@@ -136,7 +137,8 @@ def create_server(client: Yad2Client | None = None) -> MCPServer[None]:
     async def search_market(search: MarketSearch, refresh: bool = False) -> SearchResult:
         """Search any market category. Hebrew queries usually work best; hardware names can be English.
 
-        collection is a slug from list_categories; product_types uses IDs from list_product_types.
+        collection is a slug from list_categories; use a query or a collection, since combining them may redirect.
+        product_types uses IDs from list_product_types.
         attributes accepts {attribute_id, values} with option IDs from list_attributes.
         conditions: 1=new in packaging, 2=like new, 3=used. Prices are ILS. Returns one full page.
         """
