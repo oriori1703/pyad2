@@ -54,6 +54,26 @@ def test_status_does_not_start_a_service_or_browser(agent_settings: Settings) ->
     assert json.loads(stopped.stdout) == {"stopped": False}
 
 
+def test_save_list_and_delete_watch_are_local_json_commands(agent_settings: Settings) -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["watch", "save", "gpu", "--search-json", '{"query":"RTX"}', "--max-pages", "2"])
+    assert result.exit_code == 0, result.output
+    result = runner.invoke(app, ["watch", "list"])
+    assert result.exit_code == 0
+    assert json.loads(result.stdout)["watches"][0]["definition"]["max_pages"] == 2
+    result = runner.invoke(app, ["watch", "delete", "gpu"])
+    assert json.loads(result.stdout) == {"name": "gpu", "deleted": True}
+    assert not (agent_settings.data_dir / "browser-service.json").exists()
+
+
+def test_bounded_search_from_cache(seeded_cache: PageSnapshot) -> None:
+    result = CliRunner().invoke(app, ["search", "RTX", "--max-pages", "3"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["complete"] is True and len(payload["pages"]) == 1
+    assert payload["pages"][0]["cached"] is True
+
+
 def test_offline_catalog_commands_and_unknown_product_errors(agent_settings: Settings) -> None:
     products = CliRunner().invoke(app, ["product-types", "--query", "computer"])
     assert products.exit_code == 0, products.output

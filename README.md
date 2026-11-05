@@ -35,9 +35,20 @@ uv run yad2 product-types --query computer
 uv run yad2 attributes COMPUTER_COMPONENTS
 uv run yad2 search RTX --product-type COMPUTER_COMPONENTS --attribute 155=13287
 
-# Pagination: each call returns one full upstream page, plus next_url
+# Pagination: a single page, or a bounded sequential scan
 uv run yad2 search RTX --page 2
+uv run yad2 search RTX --max-pages 3 --max-items 100
 uv run yad2 search-url 'https://www.yad2.co.il/market/search?q=RTX&pageNumber=3'
+
+# Live filter options and counts for a query or collection
+uv run yad2 filters RTX --product-type COMPUTER_COMPONENTS
+uv run yad2 filters --collection furniture
+
+# Save a search locally; each check fetches fresh pages
+uv run yad2 watch save gpu --search-json '{"query":"RTX","product_types":["285"],"max_price":2000}' --max-pages 3
+uv run yad2 watch check gpu
+uv run yad2 watch list
+uv run yad2 watch delete gpu
 
 # Other sections: copy the site's filtered URL; query names differ by section
 uv run yad2 search-url 'https://www.yad2.co.il/realestate/rent?city=5000&maxPrice=6000'
@@ -51,9 +62,41 @@ other IDs. `--city`, `--area`, `--condition`, `--product-type`, and `--attribute
 Product types accept numeric IDs, enum names, or exact English/Hebrew labels in the CLI.
 Attribute filters use `ATTRIBUTE_ID=OPTION_ID[,OPTION_ID]`; combine multiple options for one attribute.
 
-Successful commands emit UTF-8 JSON on stdout. Results include `source_url`, `fetched_at`, and `cached`;
-search results also include `total`, `page`, `total_pages`, `next_url`, and parser `warnings`. Missing
+Successful commands emit UTF-8 JSON on stdout. Single-page results include `source_url`, `fetched_at`, and
+`cached`; search results also include `total`, `page`, `total_pages`, `next_url`, and parser `warnings`. Missing
 prices remain `null`; a listed price of zero stays zero. No phone-reveal action is performed.
+
+### Live filters and bounded searches
+
+`filters` captures the frontend's filter response during one navigation, with the same cache, pacing,
+and challenge handling as searches. Supply a query or collection. `--search-json` accepts a complete
+`MarketSearch` object and replaces the simpler arguments. Returned product types, conditions, cities,
+price bounds, and attribute options reflect that search. Each attribute reports `total_options` and
+`options_complete`: the frontend may return only a subset. The offline publishing taxonomy remains
+useful for broader discovery but does not imply that every option is currently searchable.
+
+`search` and `search-url` preserve their single-page output with default limits. Changing `--max-pages`
+(1–20) or `--max-items` (1–1,000) returns a `SearchBatch`: unique listings, per-page provenance, duplicate
+count, warnings, `next_url`, `stop_reason`, and `complete`. Pages are fetched sequentially; errors abort
+the scan. Stop reasons are `exhausted`, `page_limit`, `item_limit`, and `pagination_unknown`.
+`complete` requires traversal from page 1 to known exhaustion with consistent metadata and no warnings;
+it describes observed coverage, not a frozen snapshot of a changing marketplace. When an item limit
+cuts through a page, `next_url` points back to that page; resuming callers must deduplicate and use a
+large enough item budget to progress past the already seen entries.
+
+### Saved searches
+
+Watches live in `YAD2_DATA_DIR/watches.sqlite3` and run **on demand** with `watch check`; there is no
+background scheduler. The first successful check establishes a baseline. Later checks report new and
+returned listings, known-price changes (including drops), and `no_longer_in_results`. Only a complete
+scan can mark a previously observed listing absent; absence does not establish sale or deletion.
+An incomplete scan still updates observed listings, and a newly encountered listing may have existed
+outside earlier scan limits. Unknown prices are not treated as zero or reported as price changes.
+
+Checks always fetch fresh pages. Failed scans preserve the previous baseline; overlapping checks or
+configuration edits cannot overwrite newer state. Saving an unchanged definition preserves its baseline;
+changing its search or limits resets it. Saved searches must start on page 1. Deleting a watch removes
+its definition and observation history; `cache-clear` leaves watches intact.
 
 ## MCP setup
 
@@ -76,15 +119,22 @@ Use an absolute path to `uv` if your desktop client's PATH does not include it.
 | Tool | Purpose |
 | --- | --- |
 | `search_market` | Typed marketplace query/filter object, plus optional `refresh` |
+| `get_search_filters` | Live query-specific filter options, counts, and option-list completeness |
+| `search_pages` | Bounded marketplace pagination with deduplication and explicit coverage |
 | `get_listing` | Market numeric ID or full listing URL |
 | `list_categories` | Live collection discovery, filtered by English slug/Hebrew title |
 | `list_product_types` | Offline product IDs, enum names, and bilingual labels |
 | `list_attributes` | Offline product-specific attributes, input types, and option IDs |
 | `search_url` | Marketplace, property, and vehicle feeds with their existing URL filters |
+| `search_url_pages` | Bounded pagination for an existing feed URL |
 | `inspect_page` | Bounded Next.js JSON inspection using a dot path |
 | `get_session_status` | Local service/browser owner, saved-session metadata, and cooldown diagnostics |
+| `save_watch`, `list_watches` | Save/update local search definitions and list their status |
+| `check_watch` | Fetch fresh results, report changes, and update the local baseline |
+| `delete_watch` | Delete a local search and its observation history |
 
-All tools declare input/output schemas, structured results, and read-only annotations. Example call:
+All tools declare input/output schemas, structured results, and read/write annotations. Search tools
+are read-only; `save_watch`, `check_watch`, and `delete_watch` mutate local state. Example `search_market` call:
 
 ```json
 {
@@ -148,7 +198,8 @@ saved-state timestamp, cached-page count, and remaining cooldown. Credentials an
 Saved-state presence does not assert that an account login is still valid. Ordinary public searches do
 not require account login; a complete taxonomy refresh does.
 
-**Upgrading an already running MCP server:** restart it once so it loads the shared-service implementation.
+**Upgrading an already running MCP server:** restart it to load the new tools. Run `uv run yad2 browser-stop`
+to stop any older service; the next uncached request starts the updated protocol with live filter support.
 An older process or a direct catalog capture can still own the exclusive browser lock; `status` identifies
 this situation. Finish that operation before using the shared service. When changing service settings,
 run `browser-stop` first. Startup diagnostics are in `browser-service.log` in the private data directory.
@@ -167,7 +218,7 @@ Constructor settings and equivalent environment variables:
 | --- | --- | --- |
 | `YAD2_HEADLESS` | `true` | Set `false` to make regular browsing visible |
 | `YAD2_CHANNEL` | `chromium` | Patchright browser channel; `chrome` uses an installed Chrome |
-| `YAD2_DATA_DIR` | OS user-data directory / `yad2` | Private browser session state and ownership lock |
+| `YAD2_DATA_DIR` | OS user-data directory / `yad2` | Browser session state, ownership lock, and saved searches |
 | `YAD2_CACHE_DIR` | OS user-cache directory / `yad2` | SQLite cache and request budget |
 | `YAD2_TIMEOUT_SECONDS` | `45` | Browser navigation/readiness timeout |
 | `YAD2_MIN_INTERVAL_SECONDS` | `3` | Minimum spacing between page navigations |
@@ -202,6 +253,11 @@ async def main() -> None:
             details = await client.get_listing(results.listings[0].url)
             print(details.listing.description)
 
+        filters = await client.filters(MarketSearch(query="RTX", product_types=("285",)))
+        print(filters.attributes)
+        batch = await client.search_pages(MarketSearch(query="RTX"), max_pages=3, max_items=100)
+        print(batch.complete, batch.stop_reason, batch.next_url)
+
 
 anyio.run(main, backend="asyncio")
 ```
@@ -216,6 +272,19 @@ holds the exclusive browser lock and is intended for standalone browser workflow
 Async orchestration uses AnyIO, including task groups, locks, worker threads, and filesystem access.
 Use AnyIO's `asyncio` backend for browser-backed operations because Patchright requires it. The test
 suite uses AnyIO's pytest plugin with the same backend.
+
+### Comparison-friendly listing attributes
+
+Listings retain their raw `attributes` and also expose `normalized_attributes` when the payload contains
+explicit attribute rows (often on listing details). Each entry keeps `raw_value`, bilingual labels,
+option ID, attribute ID/name, and `id_source`. IDs present in the listing are marked `listing`; missing
+IDs resolved by an unambiguous label in that product's catalog are marked `catalog`. Unknown attributes
+remain available without invented IDs. Fetch listing details when feed cards omit these attributes.
+
+Explicit measurements normalize to `cm`, `GB`, `MHz`, or `kg` through `numeric_value` and `unit`.
+Units must appear in the value or attribute label; ranges and unitless values remain raw. Storage
+conversion uses decimal units (1 TB = 1,000 GB). These fields describe seller-supplied values, not
+verified dimensions or hardware compatibility. Public result types are exported from `yad2_client`.
 
 ### Product and attribute enums
 
@@ -311,7 +380,9 @@ uv run pytest -m live tests/test_live.py
 ```
 
 Offline tests cover URL/filter validation, observed payload shapes, missing/malformed data, pagination,
-cache persistence/expiry, pacing, challenge cooldown, CLI output, and a real MCP stdio subprocess round trip.
+cache persistence/expiry, pacing, challenge cooldown, attribute normalization, saved-search concurrency,
+CLI output, and a real MCP stdio subprocess round trip. Live-filter capture uses observed payloads and
+frontend metadata in offline tests; the new four-feature workflow has not been live-smoke-tested.
 CI runs offline checks only. The live example test may eventually fail when the listing expires.
 
 Live-verified on **2026-11-05**: the supplied item (NVIDIA 5070 ti, ₪3,500, Tel Aviv–Yafo), RTX searches,

@@ -19,15 +19,26 @@ async def test_stdio_round_trip_schemas_structured_results_and_errors(seeded_cac
         assert {tool.name for tool in tools} == {
             "search_market",
             "search_url",
+            "search_url_pages",
             "get_listing",
             "list_categories",
             "list_product_types",
             "list_attributes",
             "get_session_status",
+            "get_search_filters",
+            "search_pages",
+            "save_watch",
+            "list_watches",
+            "check_watch",
+            "delete_watch",
             "inspect_page",
         }
         assert all(tool.output_schema for tool in tools)
-        assert all(tool.annotations is not None and tool.annotations.read_only_hint for tool in tools)
+        writes = {"save_watch", "check_watch", "delete_watch"}
+        assert all(
+            tool.annotations is not None and tool.annotations.read_only_hint == (tool.name not in writes)
+            for tool in tools
+        )
         status = await session.call_tool("get_session_status", {})
         assert not status.is_error and status.structured_content is not None
         assert status.structured_content["service_state"] == "stopped"
@@ -42,6 +53,19 @@ async def test_stdio_round_trip_schemas_structured_results_and_errors(seeded_cac
         assert result.structured_content is not None
         assert result.structured_content["listings"][0]["id"] == "123"
         assert result.structured_content["cached"] is True
+        pages = await session.call_tool("search_pages", {"search": {"query": "RTX"}, "max_pages": 3})
+        assert not pages.is_error and pages.structured_content is not None
+        assert pages.structured_content["complete"] is True
+        url_pages = await session.call_tool("search_url_pages", {"url": seeded_cache.url, "max_pages": 3})
+        assert not url_pages.is_error and url_pages.structured_content is not None
+        assert url_pages.structured_content["complete"] is True
+        saved = await session.call_tool("save_watch", {"definition": {"name": "gpu", "search": {"query": "RTX"}}})
+        assert not saved.is_error
+        watches = await session.call_tool("list_watches", {})
+        assert watches.structured_content is not None
+        assert watches.structured_content["watches"][0]["definition"]["name"] == "gpu"
+        deleted = await session.call_tool("delete_watch", {"name": "gpu"})
+        assert deleted.structured_content == {"name": "gpu", "deleted": True}
         failure = await session.call_tool("get_listing", {"id_or_url": "https://example.com/"})
         assert failure.is_error
         invalid = await session.call_tool("search_market", {"search": {"page": 0}})

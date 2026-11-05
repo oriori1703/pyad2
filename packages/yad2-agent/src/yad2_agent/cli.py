@@ -11,6 +11,7 @@ import typer
 from pydantic import BaseModel
 
 from yad2_agent.page import PageView, inspect_page
+from yad2_agent.watches import WatchDefinition, WatchStore
 from yad2_client import MarketSearch, Settings, SortOrder, Yad2Client
 from yad2_client.cache import Cache
 from yad2_client.catalog import catalog_product, catalog_products, resolve_product_type
@@ -19,6 +20,8 @@ from yad2_client.models import AttributeFilter
 from yad2_client.shared_browser import SharedBrowserTransport, session_status, stop_service
 
 app = typer.Typer(no_args_is_help=True, help="Search Yad2 listings. JSON on stdout; errors on stderr.")
+watch_app = typer.Typer(no_args_is_help=True, help="Save searches locally and check for listing changes.")
+app.add_typer(watch_app, name="watch")
 Refresh = Annotated[bool, typer.Option(help="Fetch fresh data instead of using the cache.")]
 
 
@@ -55,11 +58,14 @@ def search(
     condition: Annotated[list[str] | None, typer.Option(help="1=packaged new, 2=like new, 3=used; repeatable.")] = None,
     sort: SortOrder = SortOrder.RELEVANCE,
     page: Annotated[int, typer.Option(min=1, max=10000)] = 1,
+    max_pages: Annotated[int, typer.Option(min=1, max=20)] = 1,
+    max_items: Annotated[int, typer.Option(min=1, max=1000)] = 250,
     refresh: Refresh = False,
 ) -> None:
-    """Search all marketplace categories, one page at a time."""
+    """Search the marketplace; --max-pages enables a bounded, deduplicated scan."""
     _run(
-        lambda client: client.search(
+        lambda client: _search(
+            client,
             MarketSearch(
                 query=query,
                 collection=collection,
@@ -74,8 +80,81 @@ def search(
                 page=page,
             ),
             refresh=refresh,
+            max_pages=max_pages,
+            max_items=max_items,
         )
     )
+
+
+async def _search(
+    client: Yad2Client, search: MarketSearch, *, max_pages: int, max_items: int, refresh: bool
+) -> BaseModel:
+    if max_pages == 1 and max_items == 250:
+        return await client.search(search, refresh=refresh)
+    return await client.search_pages(search, max_pages=max_pages, max_items=max_items, refresh=refresh)
+
+
+@app.command("filters")
+def live_filters(
+    query: Annotated[str, typer.Argument()] = "",
+    collection: str | None = None,
+    product_type: Annotated[list[str] | None, typer.Option(help="Product ID or enum name; repeatable.")] = None,
+    search_json: Annotated[
+        str | None, typer.Option(help="Full MarketSearch JSON; replaces the simple search arguments.")
+    ] = None,
+    refresh: Refresh = False,
+) -> None:
+    """Discover live search options/counts, including option-list completeness."""
+    _run(
+        lambda client: client.filters(
+            MarketSearch.model_validate_json(search_json)
+            if search_json is not None
+            else MarketSearch(
+                query=query,
+                collection=collection,
+                product_types=tuple(resolve_product_type(value) for value in product_type or ()),
+            ),
+            refresh=refresh,
+        )
+    )
+
+
+@watch_app.command("save")
+def save_watch(
+    name: str,
+    search_json: Annotated[str, typer.Option(help="MarketSearch JSON using numeric filter IDs.")],
+    max_pages: Annotated[int, typer.Option(min=1, max=20)] = 3,
+    max_items: Annotated[int, typer.Option(min=1, max=1000)] = 250,
+) -> None:
+    """Save a local search; changing its configuration resets the observation baseline."""
+    _run(
+        lambda client: WatchStore(client.settings.data_dir).save(
+            WatchDefinition(
+                name=name,
+                search=MarketSearch.model_validate_json(search_json),
+                max_pages=max_pages,
+                max_items=max_items,
+            )
+        )
+    )
+
+
+@watch_app.command("list")
+def list_watches() -> None:
+    """List saved searches and the time of their last successful check."""
+    _run(lambda client: WatchStore(client.settings.data_dir).list())
+
+
+@watch_app.command("check")
+def check_watch(name: str) -> None:
+    """Fetch fresh pages and atomically report new/returned listings and price changes."""
+    _run(lambda client: WatchStore(client.settings.data_dir).check(name, client))
+
+
+@watch_app.command("delete")
+def delete_watch(name: str) -> None:
+    """Delete a local saved search and its observation history."""
+    _run(lambda client: WatchStore(client.settings.data_dir).delete(name))
 
 
 def _attribute_filter(value: str) -> AttributeFilter:
@@ -103,9 +182,20 @@ def product_attributes(product_type: str) -> None:
 
 
 @app.command("search-url")
-def search_url(url: str, refresh: Refresh = False) -> None:
+def search_url(
+    url: str,
+    refresh: Refresh = False,
+    max_pages: Annotated[int, typer.Option(min=1, max=20)] = 1,
+    max_items: Annotated[int, typer.Option(min=1, max=1000)] = 250,
+) -> None:
     """Read a feed URL, including property and vehicle sections and next_url pagination."""
-    _run(lambda client: client.search_url(url, refresh=refresh))
+    _run(
+        lambda client: (
+            client.search_url(url, refresh=refresh)
+            if max_pages == 1 and max_items == 250
+            else client.search_url_pages(url, max_pages=max_pages, max_items=max_items, refresh=refresh)
+        )
+    )
 
 
 @app.command("get")
