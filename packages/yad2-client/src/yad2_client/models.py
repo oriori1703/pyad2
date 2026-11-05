@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -51,6 +51,18 @@ class MarketSearch(Model):
         return self
 
 
+class ListingAttribute(Model):
+    attribute_id: str | None = None
+    name: str | None = None
+    label_en: str | None = None
+    label_he: str | None = None
+    option_id: str | None = None
+    raw_value: JsonValue = None
+    numeric_value: float | None = None
+    unit: Literal["cm", "GB", "MHz", "kg"] | None = None
+    id_source: Literal["listing", "catalog"] | None = None
+
+
 class Listing(Model):
     id: str
     url: str
@@ -67,6 +79,7 @@ class Listing(Model):
     product_type_id: str | None = None
     images: tuple[str, ...] = ()
     attributes: dict[str, JsonValue] = Field(default_factory=dict)
+    normalized_attributes: tuple[ListingAttribute, ...] = ()
     seller_name: str | None = None
 
 
@@ -113,3 +126,50 @@ class CategoryResult(Model):
     source_url: str
     fetched_at: datetime
     cached: bool = False
+
+
+class FilterOption(Model):
+    id: str
+    label: str
+    count: int = Field(ge=0)
+
+
+class SearchAttribute(Model):
+    id: str
+    label_en: str
+    label_he: str
+    options: tuple[FilterOption, ...]
+    total_options: int = Field(ge=0)
+    options_complete: bool
+
+
+class SearchFilters(Model):
+    source_url: str
+    fetched_at: datetime
+    cached: bool = False
+    product_types: tuple[FilterOption, ...]
+    conditions: tuple[FilterOption, ...]
+    cities: tuple[FilterOption, ...]
+    attributes: tuple[SearchAttribute, ...]
+    min_price: float | None = None
+    max_price: float | None = None
+
+
+class SearchPage(Model):
+    source_url: str
+    page: int
+    fetched_at: datetime
+    cached: bool
+    total: int | None
+    total_pages: int | None
+    warnings: tuple[str, ...] = ()
+
+
+class SearchBatch(Model):
+    listings: tuple[Listing, ...]
+    pages: tuple[SearchPage, ...]
+    next_url: str | None
+    stop_reason: Literal["exhausted", "page_limit", "item_limit", "pagination_unknown"]
+    complete: bool
+    duplicates_removed: int
+    warnings: tuple[str, ...] = ()

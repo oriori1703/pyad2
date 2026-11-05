@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 
 from pydantic import JsonValue
 
+from yad2_client.attributes import normalize_attributes
 from yad2_client.errors import ParseError
 from yad2_client.models import Category, CategoryResult, Listing, ListingResult, PageSnapshot, SearchResult
 from yad2_client.urls import ORIGIN, with_page
@@ -104,6 +105,9 @@ def parse_listing(data: dict[str, JsonValue], section: str) -> Listing:
         product_type_id=text(obj(data.get("productType")).get("id")),
         images=tuple(image for image in images if isinstance(image, str) and image.startswith("https://")),
         attributes=attributes,
+        normalized_attributes=normalize_attributes(
+            array(data.get("attributeKeys")), text(obj(data.get("productType")).get("id"))
+        ),
         seller_name=text(customer.get("name")) or text(customer.get("agencyName")),
     )
 
