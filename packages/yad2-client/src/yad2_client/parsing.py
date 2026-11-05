@@ -1,4 +1,4 @@
-"""Pure parsers for observed marketplace, property and vehicle Next.js payloads."""
+"""Shared, network-free domain parsers for source-neutral upstream objects."""
 
 import math
 from urllib.parse import parse_qs, urlsplit
@@ -7,24 +7,9 @@ from pydantic import JsonValue
 
 from yad2_client.attributes import normalize_attributes
 from yad2_client.errors import ParseError
-from yad2_client.models import Category, CategoryResult, Listing, ListingResult, PageSnapshot, SearchResult
+from yad2_client.extraction import array, extract_listing, extract_search, obj, text
+from yad2_client.models import Category, CategoryResult, Listing, ListingResult, PageSnapshot, RawPayload, SearchResult
 from yad2_client.urls import ORIGIN, with_page
-
-
-def obj(value: JsonValue | None) -> dict[str, JsonValue]:
-    return value if isinstance(value, dict) else {}
-
-
-def array(value: JsonValue | None) -> list[JsonValue]:
-    return value if isinstance(value, list) else []
-
-
-def text(value: JsonValue | None) -> str | None:
-    if isinstance(value, str):
-        return value.strip() or None
-    if isinstance(value, int) and not isinstance(value, bool):
-        return str(value)
-    return None
 
 
 def label(value: JsonValue | None) -> str | None:
@@ -47,17 +32,6 @@ def number(value: JsonValue | None) -> float | None:
 def integer(value: JsonValue | None) -> int | None:
     result = number(value)
     return int(result) if result is not None and result >= 0 and result.is_integer() else None
-
-
-def page_props(snapshot: PageSnapshot) -> dict[str, JsonValue]:
-    return obj(obj(snapshot.data.get("props")).get("pageProps"))
-
-
-def query_data(props: dict[str, JsonValue]) -> list[tuple[list[JsonValue], dict[str, JsonValue]]]:
-    return [
-        (array(obj(query).get("queryKey")), obj(obj(obj(query).get("state")).get("data")))
-        for query in array(obj(props.get("dehydratedState")).get("queries"))
-    ]
 
 
 def parse_listing(data: dict[str, JsonValue], section: str) -> Listing:
@@ -112,22 +86,11 @@ def parse_listing(data: dict[str, JsonValue], section: str) -> Listing:
     )
 
 
-def _feed(props: dict[str, JsonValue]) -> dict[str, JsonValue]:
-    for key in ("initialFeed", "feed"):
-        if isinstance(props.get(key), dict):
-            return obj(props[key])
-    for query_key, data in query_data(props):
-        if query_key and isinstance(query_key[0], str) and ("feed" in query_key[0] or query_key[0] == "search"):
-            if any(name in data for name in ("items", "yad2", "ads")):
-                return data
-            pages = array(data.get("pages"))
-            if pages and isinstance(pages[0], dict):
-                return pages[0]
-    raise ParseError("No recognized listing feed. Use a search/collection URL; the page schema may have changed.")
-
-
-def parse_search(snapshot: PageSnapshot) -> SearchResult:
-    feed = _feed(page_props(snapshot))
+def parse_search(snapshot: RawPayload | PageSnapshot) -> SearchResult:
+    snapshot = extract_search(snapshot) if isinstance(snapshot, PageSnapshot) else snapshot
+    if snapshot.kind != "search":
+        raise ParseError("Expected a search payload")
+    feed = snapshot.data
     section = urlsplit(snapshot.url).path.strip("/").split("/")[0]
     rows: list[JsonValue] = []
     # Explicit feed groups avoid accidentally collecting recommended listings or filter options.
@@ -154,6 +117,18 @@ def parse_search(snapshot: PageSnapshot) -> SearchResult:
     query = parse_qs(urlsplit(snapshot.url).query)
     requested_page = query.get("pageNumber" if section == "market" else "page", ["1"])[0]
     page = integer(feed.get("currentPage")) or integer(requested_page) or 1
+    if section == "market":
+        current = feed.get("currentPage")
+        empty = (
+            feed.get("items") == []
+            and not listings
+            and not warnings
+            and all(
+                type(feed.get(key)) is int and feed[key] == 0 for key in ("currentPage", "totalItems", "totalPages")
+            )
+        )
+        if not empty and (type(current) is not int or current != integer(requested_page)):
+            raise ParseError("Feed returned a different page than requested or omitted its page number")
     return SearchResult(
         listings=tuple(listings.values()),
         source_url=snapshot.url,
@@ -167,23 +142,20 @@ def parse_search(snapshot: PageSnapshot) -> SearchResult:
     )
 
 
-def parse_item(snapshot: PageSnapshot) -> ListingResult:
-    props = page_props(snapshot)
+def parse_item(snapshot: RawPayload | PageSnapshot) -> ListingResult:
+    snapshot = extract_listing(snapshot) if isinstance(snapshot, PageSnapshot) else snapshot
+    if snapshot.kind != "listing":
+        raise ParseError("Expected a listing payload")
     section = urlsplit(snapshot.url).path.strip("/").split("/")[0]
     expected = urlsplit(snapshot.url).path.rstrip("/").split("/")[-1]
-    candidates = [obj(props.get("item"))]
-    for key, data in query_data(props):
-        if any(isinstance(part, str) and ("item" in part.lower() or part == "ad") for part in key):
-            candidates.extend([data, obj(data.get("data")), obj(data.get("item"))])
-    for candidate in candidates:
-        if (text(candidate.get("token")) or text(candidate.get("id"))) == expected:
-            return ListingResult(
-                listing=parse_listing(candidate, section),
-                source_url=snapshot.url,
-                fetched_at=snapshot.fetched_at,
-                cached=snapshot.cached,
-            )
-    raise ParseError(f"Requested listing {expected} was not present in the page payload")
+    if (text(snapshot.data.get("token")) or text(snapshot.data.get("id"))) != expected:
+        raise ParseError(f"Requested listing {expected} was not present in the payload")
+    return ListingResult(
+        listing=parse_listing(snapshot.data, section),
+        source_url=snapshot.url,
+        fetched_at=snapshot.fetched_at,
+        cached=snapshot.cached,
+    )
 
 
 def parse_categories(snapshot: PageSnapshot, query: str = "") -> CategoryResult:

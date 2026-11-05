@@ -93,12 +93,25 @@ class Category(Link):
 
 
 class PageSnapshot(Model):
-    """Transport boundary; also usable for offline parsers and custom transports."""
+    """Original page JSON and rendered links, for raw inspection and wrapper extraction."""
 
     url: str
     fetched_at: datetime
     data: dict[str, JsonValue]
     links: tuple[Link, ...] = ()
+    cached: bool = False
+
+
+PayloadKind = Literal["search", "filters", "listing"]
+
+
+class RawPayload(Model):
+    """Source-neutral upstream object, before domain validation or normalization."""
+
+    kind: PayloadKind
+    url: str
+    fetched_at: datetime
+    data: dict[str, JsonValue]
     cached: bool = False
 
 

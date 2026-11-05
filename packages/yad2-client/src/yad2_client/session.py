@@ -11,10 +11,10 @@ from anyio.streams.buffered import BufferedByteReceiveStream
 from filelock import FileLock, Timeout
 from pydantic import BaseModel, Field
 
-from yad2_client.models import Model, PageSnapshot
+from yad2_client.models import Model, PageSnapshot, RawPayload
 from yad2_client.settings import Settings
 
-PROTOCOL_VERSION = 3
+PROTOCOL_VERSION = 4
 MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 
 
@@ -37,7 +37,7 @@ class BrowserActivity(Model):
     pid: int
     started_at: datetime
     browser_running: bool
-    operation: Literal["fetch", "search", "filters", "verify"] | None = None
+    operation: Literal["fetch", "search", "filters", "listing", "verify"] | None = None
     transport: Literal["http", "browser"] = "browser"
     queued_requests: int = 0
 
@@ -45,7 +45,7 @@ class BrowserActivity(Model):
 class ServiceRequest(Model):
     protocol: int = PROTOCOL_VERSION
     token: str
-    operation: Literal["fetch", "search", "filters", "verify", "status", "stop"]
+    operation: Literal["fetch", "search", "filters", "listing", "verify", "status", "stop"]
     url: str = ""
     wait_seconds: float = Field(default=180, ge=1, le=600)
 
@@ -57,6 +57,7 @@ class ServiceError(Model):
 
 class ServiceResponse(Model):
     snapshot: PageSnapshot | None = None
+    payload: RawPayload | None = None
     activity: BrowserActivity | None = None
     error: ServiceError | None = None
 

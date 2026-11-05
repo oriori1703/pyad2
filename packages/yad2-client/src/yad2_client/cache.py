@@ -5,13 +5,20 @@ import time
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
 from pathlib import Path
+from typing import TypeVar
 
 import anyio
 from pydantic import ValidationError
 
 from yad2_client.errors import RateLimited
-from yad2_client.models import PageSnapshot
+from yad2_client.models import PageSnapshot, PayloadKind, RawPayload
 from yad2_client.session import CacheStatus
+
+Snapshot = TypeVar("Snapshot", PageSnapshot, RawPayload)
+
+
+def _payload_key(url: str, kind: PayloadKind) -> str:
+    return f"raw-v1:{kind}:{url}"
 
 
 class Cache:
@@ -30,21 +37,25 @@ class Cache:
         finally:
             connection.close()
 
-    def _get(self, url: str, ttl: float) -> PageSnapshot | None:
+    def _get(self, url: str, ttl: float, model: type[Snapshot]) -> Snapshot | None:
         with self._connect() as connection:
             row = connection.execute("SELECT saved, data FROM pages WHERE url = ?", (url,)).fetchone()
         if row is None or ttl <= 0 or time.time() - row[0] >= ttl:
             return None
         try:
-            snapshot = PageSnapshot.model_validate_json(row[1])
+            snapshot = model.model_validate_json(row[1])
         except ValidationError:
             return None
         return snapshot.model_copy(update={"cached": True})
 
     async def get(self, url: str, ttl: float) -> PageSnapshot | None:
-        return await anyio.to_thread.run_sync(self._get, url, ttl)
+        return await anyio.to_thread.run_sync(self._get, url, ttl, PageSnapshot)
 
-    def _put(self, url: str, snapshot: PageSnapshot) -> None:
+    async def get_payload(self, url: str, kind: PayloadKind, ttl: float) -> RawPayload | None:
+        payload = await anyio.to_thread.run_sync(self._get, _payload_key(url, kind), ttl, RawPayload)
+        return payload if payload is not None and payload.kind == kind else None
+
+    def _put(self, url: str, snapshot: PageSnapshot | RawPayload) -> None:
         with self._connect() as connection:
             connection.execute(
                 "INSERT OR REPLACE INTO pages VALUES (?, ?, ?)",
@@ -56,6 +67,9 @@ class Cache:
 
     async def put(self, url: str, snapshot: PageSnapshot) -> None:
         await anyio.to_thread.run_sync(self._put, url, snapshot)
+
+    async def put_payload(self, url: str, payload: RawPayload) -> None:
+        await anyio.to_thread.run_sync(self._put, _payload_key(url, payload.kind), payload)
 
     def _reserve(self, interval: float) -> float:
         with self._connect() as connection:

@@ -44,7 +44,7 @@ def test_empty_feed_is_distinct_from_schema_drift(snapshot: PageSnapshot) -> Non
     def feed(data: dict[str, JsonValue]) -> PageSnapshot:
         return snapshot.model_copy(update={"data": {"props": {"pageProps": {"initialFeed": data}}}})
 
-    empty = parse_search(feed({"items": [], "totalItems": 0, "totalPages": 0}))
+    empty = parse_search(feed({"items": [], "totalItems": 0, "totalPages": 0, "currentPage": 0}))
     assert empty.listings == () and empty.total == 0 and empty.next_url is None
     with pytest.raises(ParseError):
         parse_search(feed({"unknownNewField": []}))
@@ -56,7 +56,11 @@ def test_deduplicates_feed_and_reports_partial_failures(
     snapshot: PageSnapshot, market_item: dict[str, JsonValue]
 ) -> None:
     data: dict[str, JsonValue] = {
-        "props": {"pageProps": {"initialFeed": {"items": [market_item, market_item, {"unexpected": "schema"}]}}}
+        "props": {
+            "pageProps": {
+                "initialFeed": {"items": [market_item, market_item, {"unexpected": "schema"}], "currentPage": 1}
+            }
+        }
     }
     result = parse_search(snapshot.model_copy(update={"data": data}))
     assert len(result.listings) == 1

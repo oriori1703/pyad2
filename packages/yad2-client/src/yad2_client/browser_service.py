@@ -13,7 +13,6 @@ from anyio.streams.buffered import BufferedByteReceiveStream
 from filelock import FileLock, Timeout
 from pydantic import TypeAdapter, ValidationError
 
-from yad2_client.browser import SearchTransport
 from yad2_client.cache import Cache
 from yad2_client.errors import BrowserError, ChallengeRequired, RateLimited, Yad2Error
 from yad2_client.hybrid import HybridTransport
@@ -29,23 +28,18 @@ from yad2_client.session import (
     write_private,
 )
 from yad2_client.settings import Settings
+from yad2_client.sources import DataSource
 from yad2_client.urls import validate_url
 
 
-class BrowserSession(Protocol):
+class BrowserSession(DataSource, Protocol):
     @property
     def retry_after(self) -> float: ...
 
     @property
     def running(self) -> bool: ...
 
-    async def fetch(self, url: str) -> PageSnapshot: ...
-
-    async def fetch_filters(self, url: str) -> PageSnapshot: ...
-
     async def interactive(self, url: str, wait_seconds: float) -> PageSnapshot: ...
-
-    async def close(self) -> None: ...
 
 
 class BrowserService:
@@ -123,12 +117,12 @@ class BrowserService:
             try:
                 with anyio.fail_after(3 * self.settings.timeout_seconds):
                     if request.operation == "filters":
-                        snapshot = await self.browser.fetch_filters(url)
-                    elif request.operation == "search" and isinstance(self.browser, SearchTransport):
-                        snapshot = await self.browser.fetch_search(url)
-                    else:
-                        snapshot = await self.browser.fetch(url)
-                return ServiceResponse(snapshot=snapshot)
+                        return ServiceResponse(payload=await self.browser.fetch_filters(url))
+                    if request.operation == "search":
+                        return ServiceResponse(payload=await self.browser.fetch_search(url))
+                    if request.operation == "listing":
+                        return ServiceResponse(payload=await self.browser.fetch_listing(url))
+                    return ServiceResponse(snapshot=await self.browser.fetch(url))
             except (ChallengeRequired, RateLimited):
                 await self.cache.block(max(self.settings.cooldown_seconds, self.browser.retry_after))
                 await self.browser.close()

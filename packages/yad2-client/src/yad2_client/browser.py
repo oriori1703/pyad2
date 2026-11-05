@@ -5,7 +5,6 @@ import sys
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
 from urllib.parse import parse_qs, unquote, urlsplit
 
 import anyio
@@ -16,8 +15,9 @@ from patchright.async_api import TimeoutError as PlaywrightTimeout
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, ParseError, RateLimited
+from yad2_client.extraction import extract_api, extract_listing, extract_search
 from yad2_client.http_state import HttpIdentity
-from yad2_client.models import Link, PageSnapshot
+from yad2_client.models import Link, PageSnapshot, RawPayload
 from yad2_client.session import browser_lock_status, new_owner, write_private
 from yad2_client.settings import Settings
 from yad2_client.urls import validate_url
@@ -25,22 +25,6 @@ from yad2_client.urls import validate_url
 _JSON_OBJECT = TypeAdapter(dict[str, JsonValue])
 _LINKS = TypeAdapter(tuple[Link, ...])
 _CHALLENGE_MARKERS = ("radware bot manager", "shieldsquare", "are you for real", "verifying your browser")
-
-
-class Transport(Protocol):
-    async def fetch(self, url: str) -> PageSnapshot: ...
-
-    async def close(self) -> None: ...
-
-
-@runtime_checkable
-class FilterTransport(Protocol):
-    async def fetch_filters(self, url: str) -> PageSnapshot: ...
-
-
-@runtime_checkable
-class SearchTransport(Protocol):
-    async def fetch_search(self, url: str) -> PageSnapshot: ...
 
 
 def retry_after_seconds(value: str | None) -> float:
@@ -189,7 +173,13 @@ class BrowserTransport:
         except PlaywrightError as exc:
             raise BrowserError(f"Interactive verification did not complete: {exc}") from exc
 
-    async def fetch_filters(self, url: str) -> PageSnapshot:
+    async def fetch_search(self, url: str) -> RawPayload:
+        return extract_search(await self.fetch(url))
+
+    async def fetch_listing(self, url: str) -> RawPayload:
+        return extract_listing(await self.fetch(url))
+
+    async def fetch_filters(self, url: str) -> RawPayload:
         """Capture the live filters requested by the search frontend during one navigation."""
         url = validate_url(url)
         parsed = urlsplit(url)
@@ -250,7 +240,10 @@ class BrowserTransport:
                     raise ParseError("Live filter collection does not match the page's collection metadata")
             elif urlsplit(response.url).path != endpoint:
                 raise ParseError("Live filter endpoint does not match the search page")
-            return PageSnapshot(url=snapshot.url, fetched_at=datetime.now(UTC), data=_JSON_OBJECT.validate_json(body))
+            return extract_api(
+                PageSnapshot(url=snapshot.url, fetched_at=datetime.now(UTC), data=_JSON_OBJECT.validate_json(body)),
+                "filters",
+            )
         except (PlaywrightTimeout, ValidationError) as exc:
             raise ParseError("The search frontend did not return recognized live filter data") from exc
         except PlaywrightError as exc:

@@ -5,6 +5,7 @@ import pytest
 
 from yad2_client import MarketSearch, Settings
 from yad2_client.cache import Cache
+from yad2_client.extraction import extract_search
 from yad2_client.models import PageSnapshot
 from yad2_client.urls import market_url
 
@@ -42,5 +43,5 @@ async def seeded_cache(agent_settings: Settings, anyio_backend: str) -> PageSnap
         },
     )
     await Cache(agent_settings.cache_dir).put(snapshot.url, snapshot)
-    await Cache(agent_settings.cache_dir).put(f"search:{snapshot.url}", snapshot)
+    await Cache(agent_settings.cache_dir).put_payload(snapshot.url, extract_search(snapshot))
     return snapshot

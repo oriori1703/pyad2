@@ -15,10 +15,9 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from yad2_client.browser import retry_after_seconds
 from yad2_client.cache import Cache
 from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, ParseError, RateLimited
-from yad2_client.filters import parse_filters
+from yad2_client.extraction import extract_api, extract_listing, page_props
 from yad2_client.http_state import BrowserState, HttpIdentity
-from yad2_client.models import PageSnapshot
-from yad2_client.parsing import obj, page_props, parse_item, parse_search
+from yad2_client.models import PageSnapshot, RawPayload
 from yad2_client.session import new_owner, write_private
 from yad2_client.settings import Settings
 from yad2_client.urls import ORIGIN, validate_url
@@ -188,12 +187,9 @@ class HttpTransport:
         url = validate_url(url)
         async with self._session() as (client, _):
             response = await self._get(client, url, referer=ORIGIN + "/market")
-            snapshot = html_snapshot(url, response.text)
-            if urlsplit(url).path.startswith("/market/item/"):
-                parse_item(snapshot)
-            return snapshot
+            return html_snapshot(url, response.text)
 
-    async def _feed(self, url: str, *, filters: bool) -> PageSnapshot:
+    async def _feed(self, url: str, *, filters: bool) -> RawPayload:
         url = validate_url(url)
         if not supports_search(url):
             raise ValueError("HTTP search supports verified marketplace filters only")
@@ -223,37 +219,18 @@ class HttpTransport:
                 payload = _JSON.validate_json(response.text)
             except ValidationError as exc:
                 raise ParseError("HTTP API did not return a JSON object") from exc
-            snapshot = PageSnapshot(
-                url=url,
-                fetched_at=datetime.now(UTC),
-                data=(payload if filters else {"props": {"pageProps": {"initialFeed": obj(payload.get("data"))}}}),
+            return extract_api(
+                PageSnapshot(url=url, fetched_at=datetime.now(UTC), data=payload), "filters" if filters else "search"
             )
-            if filters:
-                parse_filters(snapshot)
-            else:
-                feed = obj(payload.get("data"))
-                result = parse_search(snapshot)
-                # Observed zero-match API feeds use page 0 and explicit zero totals.
-                # The shared parser retains the requested page in the public result.
-                empty_feed = (
-                    feed.get("items") == []
-                    and not result.listings
-                    and not result.warnings
-                    and all(
-                        type(feed.get(key)) is int and feed[key] == 0
-                        for key in ("currentPage", "totalItems", "totalPages")
-                    )
-                )
-                current_page = feed.get("currentPage")
-                if not empty_feed and (type(current_page) is not int or current_page != int(page)):
-                    raise ParseError("HTTP feed returned a different page than requested or omitted its page number")
-            return snapshot
 
-    async def fetch_search(self, url: str) -> PageSnapshot:
+    async def fetch_search(self, url: str) -> RawPayload:
         return await self._feed(url, filters=False)
 
-    async def fetch_filters(self, url: str) -> PageSnapshot:
+    async def fetch_filters(self, url: str) -> RawPayload:
         return await self._feed(url, filters=True)
+
+    async def fetch_listing(self, url: str) -> RawPayload:
+        return extract_listing(await self.fetch(url))
 
     async def close(self) -> None:
         # Connections are scoped to each operation; no browser or socket survives it.

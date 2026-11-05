@@ -3,7 +3,8 @@
 from pydantic import BaseModel, Field, ValidationError
 
 from yad2_client.errors import ParseError
-from yad2_client.models import FilterOption, PageSnapshot, SearchAttribute, SearchFilters
+from yad2_client.extraction import extract_api
+from yad2_client.models import FilterOption, PageSnapshot, RawPayload, SearchAttribute, SearchFilters
 
 
 class _Option(BaseModel):
@@ -33,10 +34,6 @@ class _Filters(BaseModel):
     price: _Price
 
 
-class _Response(BaseModel):
-    data: _Filters
-
-
 def _options(values: list[_Option], group: str, warnings: list[str]) -> tuple[FilterOption, ...]:
     if len({value.value for value in values}) != len(values):
         warnings.append(
@@ -45,9 +42,12 @@ def _options(values: list[_Option], group: str, warnings: list[str]) -> tuple[Fi
     return tuple(FilterOption(id=value.value, label=value.text, count=value.count) for value in values)
 
 
-def parse_filters(snapshot: PageSnapshot) -> SearchFilters:
+def parse_filters(snapshot: RawPayload | PageSnapshot) -> SearchFilters:
+    snapshot = extract_api(snapshot, "filters") if isinstance(snapshot, PageSnapshot) else snapshot
+    if snapshot.kind != "filters":
+        raise ParseError("Expected a filters payload")
     try:
-        data = _Response.model_validate(snapshot.data).data
+        data = _Filters.model_validate(snapshot.data)
     except ValidationError as exc:
         raise ParseError("Unrecognized live filter payload; refusing to report unavailable filters as empty") from exc
     if len({attribute.attributeId for attribute in data.attributes}) != len(data.attributes):

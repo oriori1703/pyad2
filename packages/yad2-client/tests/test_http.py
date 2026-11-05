@@ -12,38 +12,12 @@ from yad2_client.browser_service import serve_browser
 from yad2_client.cache import Cache
 from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, ParseError, RateLimited
 from yad2_client.http import HttpTransport, html_snapshot, supports_search
-from yad2_client.http_state import BrowserState, HttpIdentity, StoredCookie
+from yad2_client.http_state import BrowserState, StoredCookie
 from yad2_client.hybrid import HybridTransport
 from yad2_client.models import PageSnapshot
 from yad2_client.parsing import parse_search
-from yad2_client.session import write_private
 from yad2_client.shared_browser import SharedBrowserTransport, session_status, stop_service
 from yad2_client.urls import market_url
-
-
-@pytest.fixture
-async def http_settings(settings: Settings) -> Settings:
-    settings = settings.model_copy(update={"transport": "http"})
-    await anyio.Path(settings.data_dir).mkdir(parents=True)
-    await write_private(settings.data_dir / "http-identity.json", HttpIdentity(user_agent="test-browser"))
-    await write_private(
-        settings.data_dir / "browser-state.json",
-        BrowserState(
-            cookies=[
-                StoredCookie(
-                    name="verified",
-                    value="original",
-                    domain=".yad2.co.il",
-                    path="/",
-                    expires=-1,
-                    secure=True,
-                    httpOnly=True,
-                )
-            ],
-            origins=[{"origin": "https://www.yad2.co.il", "localStorage": [{"name": "keep", "value": "untouched"}]}],
-        ),
-    )
-    return settings
 
 
 def feed(page: int = 1) -> dict[str, object]:
@@ -188,7 +162,6 @@ def test_cookie_domains_paths_expiry_and_flags_are_preserved() -> None:
         (429, "busy", RateLimited),
         (200, "<title>Radware Bot Manager</title>", ChallengeRequired),
         (200, "not JSON", ParseError),
-        (200, '{"data":{}}', ParseError),
         (302, "", PageUnavailable),
         (503, "unavailable", PageUnavailable),
     ],
@@ -259,7 +232,7 @@ async def test_wrong_page_and_wrong_collection_are_schema_errors(http_settings: 
         http_settings, transport=httpx2.MockTransport(lambda _: httpx2.Response(200, json=feed()))
     )
     with pytest.raises(ParseError, match="different page"):
-        await transport.fetch_search(market_url(MarketSearch(query="RTX", page=2)))
+        parse_search(await transport.fetch_search(market_url(MarketSearch(query="RTX", page=2))))
     transport = HttpTransport(
         http_settings,
         transport=httpx2.MockTransport(
@@ -327,7 +300,7 @@ async def test_zero_page_exception_rejects_incomplete_or_conflicting_feeds(
         http_settings, transport=httpx2.MockTransport(lambda _: httpx2.Response(200, json={"data": data}))
     )
     with pytest.raises(ParseError):
-        await transport.fetch_search(market_url(MarketSearch(query="pinstrop")))
+        parse_search(await transport.fetch_search(market_url(MarketSearch(query="pinstrop"))))
 
 
 def test_html_parser_preserves_raw_payload_and_rejects_missing_or_malformed_data(snapshot: PageSnapshot) -> None:

@@ -6,6 +6,7 @@ from typer.testing import CliRunner
 from yad2_agent.cli import app
 from yad2_client import AttributeFilter, MarketSearch, Settings
 from yad2_client.cache import Cache
+from yad2_client.extraction import extract_search
 from yad2_client.models import PageSnapshot
 from yad2_client.urls import market_url
 
@@ -98,9 +99,9 @@ def test_named_product_and_attribute_filters_hit_the_correct_cached_url(
         )
     )
     anyio.run(
-        Cache(agent_settings.cache_dir).put,
-        f"search:{url}",
-        seeded_cache.model_copy(update={"url": url}),
+        Cache(agent_settings.cache_dir).put_payload,
+        url,
+        extract_search(seeded_cache.model_copy(update={"url": url})),
         backend="asyncio",
     )
     result = CliRunner().invoke(

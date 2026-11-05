@@ -11,7 +11,7 @@ from filelock import FileLock, Timeout
 
 from yad2_client.cache import Cache
 from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, ParseError, RateLimited, Yad2Error
-from yad2_client.models import PageSnapshot
+from yad2_client.models import PageSnapshot, PayloadKind, RawPayload
 from yad2_client.session import (
     PROTOCOL_VERSION,
     ServiceRecord,
@@ -133,7 +133,7 @@ class SharedBrowserTransport:
     def __init__(self, settings: Settings) -> None:
         self.settings = _normalized(settings)
 
-    async def _request(self, operation: str, url: str, wait_seconds: float = 180) -> PageSnapshot:
+    async def _request(self, operation: str, url: str, wait_seconds: float = 180) -> ServiceResponse:
         url = validate_url(url)
         record = await ensure_service(self.settings)
         request = ServiceRequest.model_validate(
@@ -149,21 +149,34 @@ class SharedBrowserTransport:
             raise BrowserError(
                 "Lost contact with the browser service. The request was not replayed. Run `yad2 status`."
             ) from exc
+        return response
+
+    async def _page_request(self, operation: str, url: str, wait_seconds: float = 180) -> PageSnapshot:
+        response = await self._request(operation, url, wait_seconds)
         if response.snapshot is None:
-            raise BrowserError("Browser service returned no page snapshot")
+            raise BrowserError("Shared service returned no page snapshot")
         return response.snapshot
 
+    async def _payload_request(self, kind: PayloadKind, url: str) -> RawPayload:
+        response = await self._request(kind, url)
+        if response.payload is None or response.payload.kind != kind:
+            raise BrowserError(f"Shared service returned no {kind} payload")
+        return response.payload
+
     async def fetch(self, url: str) -> PageSnapshot:
-        return await self._request("fetch", url)
+        return await self._page_request("fetch", url)
 
     async def interactive(self, url: str, wait_seconds: float) -> PageSnapshot:
-        return await self._request("verify", url, wait_seconds)
+        return await self._page_request("verify", url, wait_seconds)
 
-    async def fetch_filters(self, url: str) -> PageSnapshot:
-        return await self._request("filters", url)
+    async def fetch_filters(self, url: str) -> RawPayload:
+        return await self._payload_request("filters", url)
 
-    async def fetch_search(self, url: str) -> PageSnapshot:
-        return await self._request("search", url)
+    async def fetch_search(self, url: str) -> RawPayload:
+        return await self._payload_request("search", url)
+
+    async def fetch_listing(self, url: str) -> RawPayload:
+        return await self._payload_request("listing", url)
 
     async def close(self) -> None:
         pass

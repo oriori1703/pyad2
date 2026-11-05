@@ -1,11 +1,12 @@
 """Async client shared by human and agent interfaces."""
 
+from collections.abc import Awaitable, Callable
 from types import TracebackType
-from typing import Self
+from typing import Self, TypeVar
 
 import anyio
 
-from yad2_client.browser import BrowserTransport, FilterTransport, SearchTransport, Transport
+from yad2_client.browser import BrowserTransport
 from yad2_client.cache import Cache
 from yad2_client.errors import ChallengeRequired, ParseError, RateLimited
 from yad2_client.filters import parse_filters
@@ -15,6 +16,8 @@ from yad2_client.models import (
     ListingResult,
     MarketSearch,
     PageSnapshot,
+    PayloadKind,
+    RawPayload,
     SearchBatch,
     SearchFilters,
     SearchResult,
@@ -23,13 +26,19 @@ from yad2_client.pagination import collect_pages
 from yad2_client.parsing import parse_categories, parse_item, parse_search
 from yad2_client.settings import Settings
 from yad2_client.shared_browser import SharedBrowserTransport
+from yad2_client.sources import DataSource, PageDataSource, Transport
 from yad2_client.urls import ORIGIN, listing_url, market_url, validate_url
+
+T = TypeVar("T")
 
 
 class Yad2Client:
     def __init__(self, settings: Settings | None = None, *, transport: Transport | None = None) -> None:
         self.settings = settings or Settings.from_env()
         self.transport = transport or SharedBrowserTransport(self.settings)
+        self.source: DataSource = (
+            self.transport if isinstance(self.transport, DataSource) else PageDataSource(self.transport)
+        )
         self.cache = Cache(self.settings.cache_dir)
         self._lock = anyio.Lock()
 
@@ -45,25 +54,36 @@ class Yad2Client:
         with anyio.CancelScope(shield=True):
             await self.transport.close()
 
-    async def _load(self, url: str, refresh: bool, *, filters: bool = False, search: bool = False) -> PageSnapshot:
-        key = f"filters:{url}" if filters else f"search:{url}" if search else url
+    async def _load_page(self, url: str, refresh: bool) -> PageSnapshot:
         if not refresh:
-            cached = await self.cache.get(key, self.settings.cache_ttl_seconds)
+            cached = await self.cache.get(url, self.settings.cache_ttl_seconds)
             if cached is not None:
                 return cached
+        return await self._fetch(lambda: self.source.fetch(url))
+
+    async def _load_payload(self, url: str, kind: PayloadKind, refresh: bool) -> RawPayload:
+        if not refresh:
+            cached = await self.cache.get_payload(url, kind, self.settings.cache_ttl_seconds)
+            if cached is not None:
+                return cached
+        loaders = {
+            "search": self.source.fetch_search,
+            "filters": self.source.fetch_filters,
+            "listing": self.source.fetch_listing,
+        }
+        payload = await self._fetch(lambda: loaders[kind](url))
+        if payload.kind != kind:
+            raise ParseError(f"Data source returned {payload.kind!r} instead of {kind!r}")
+        return payload
+
+    async def _fetch(self, load: Callable[[], Awaitable[T]]) -> T:
         shared = isinstance(self.transport, SharedBrowserTransport)
         if not shared:
             await self.cache.wait_turn(
                 0 if isinstance(self.transport, HttpTransport) else self.settings.min_interval_seconds
             )
         try:
-            if filters:
-                if not isinstance(self.transport, FilterTransport):
-                    raise ParseError("This custom transport does not support live filter discovery")
-                return await self.transport.fetch_filters(url)
-            if search and isinstance(self.transport, SearchTransport):
-                return await self.transport.fetch_search(url)
-            return await self.transport.fetch(url)
+            return await load()
         except (ChallengeRequired, RateLimited):
             if not shared:
                 retry_after = (
@@ -84,10 +104,10 @@ class Yad2Client:
             raise ValueError("Live filter discovery requires a query or a collection")
         url = market_url(search)
         async with self._lock:
-            snapshot = await self._load(url, refresh, filters=True)
+            snapshot = await self._load_payload(url, "filters", refresh)
             result = parse_filters(snapshot)
             if not snapshot.cached:
-                await self.cache.put(f"filters:{url}", snapshot)
+                await self.cache.put_payload(url, snapshot)
             return result
 
     async def search_pages(
@@ -107,28 +127,28 @@ class Yad2Client:
         """Read a feed URL, preserving site-specific filters across Yad2 sections."""
         url = validate_url(url)
         async with self._lock:
-            snapshot = await self._load(url, refresh, search=True)
+            snapshot = await self._load_payload(url, "search", refresh)
             result = parse_search(snapshot)
             if not snapshot.cached:
-                await self.cache.put(f"search:{url}", snapshot)
+                await self.cache.put_payload(url, snapshot)
             return result
 
     async def get_listing(self, value: str, *, refresh: bool = False) -> ListingResult:
         url = listing_url(value)
         async with self._lock:
-            snapshot = await self._load(url, refresh)
+            snapshot = await self._load_payload(url, "listing", refresh)
             result = parse_item(snapshot)
             if result.listing.url.rstrip("/") != url.rstrip("/"):
                 raise ParseError("Yad2 redirected to a different listing; the requested item may be unavailable")
             if not snapshot.cached:
-                await self.cache.put(url, snapshot)
+                await self.cache.put_payload(url, snapshot)
             return result
 
     async def categories(self, query: str = "", *, refresh: bool = False) -> CategoryResult:
         """Discover collection names/URLs from Yad2's category navigation."""
         url = f"{ORIGIN}/market"
         async with self._lock:
-            snapshot = await self._load(url, refresh)
+            snapshot = await self._load_page(url, refresh)
             result = parse_categories(snapshot, query)
             if not snapshot.cached:
                 await self.cache.put(url, snapshot)
@@ -138,7 +158,7 @@ class Yad2Client:
         """Raw structured page data for new sections/adapters; no listing-shape assumptions."""
         url = validate_url(url)
         async with self._lock:
-            snapshot = await self._load(url, refresh)
+            snapshot = await self._load_page(url, refresh)
             if not snapshot.cached:
                 await self.cache.put(url, snapshot)
             return snapshot

@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 from yad2_client.browser import BrowserTransport
 from yad2_client.cache import Cache
 from yad2_client.http import HttpTransport, supports_search
-from yad2_client.models import PageSnapshot
+from yad2_client.models import PageSnapshot, RawPayload
 from yad2_client.settings import Settings
 from yad2_client.urls import validate_url
 
@@ -41,17 +41,22 @@ class HybridTransport:
     async def fetch(self, url: str) -> PageSnapshot:
         return await self.http.fetch(url) if await self._prepare(url) else await self.browser.fetch(url)
 
-    async def fetch_search(self, url: str) -> PageSnapshot:
+    async def fetch_search(self, url: str) -> RawPayload:
         return (
-            await self.http.fetch_search(url) if await self._prepare(url, feed=True) else await self.browser.fetch(url)
+            await self.http.fetch_search(url)
+            if await self._prepare(url, feed=True)
+            else await self.browser.fetch_search(url)
         )
 
-    async def fetch_filters(self, url: str) -> PageSnapshot:
+    async def fetch_filters(self, url: str) -> RawPayload:
         return (
             await self.http.fetch_filters(url)
             if await self._prepare(url, feed=True)
             else await self.browser.fetch_filters(url)
         )
+
+    async def fetch_listing(self, url: str) -> RawPayload:
+        return await self.http.fetch_listing(url) if await self._prepare(url) else await self.browser.fetch_listing(url)
 
     async def interactive(self, url: str, wait_seconds: float) -> PageSnapshot:
         self._using_http = False

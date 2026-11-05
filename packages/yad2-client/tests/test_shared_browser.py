@@ -10,7 +10,8 @@ from yad2_client import Settings
 from yad2_client.browser_service import serve_browser
 from yad2_client.cache import Cache
 from yad2_client.errors import BrowserError, ChallengeRequired, RateLimited
-from yad2_client.models import PageSnapshot
+from yad2_client.extraction import extract_listing, extract_search
+from yad2_client.models import PageSnapshot, RawPayload
 from yad2_client.session import ServiceRequest, new_owner, read_record, write_private
 from yad2_client.shared_browser import SharedBrowserTransport, _exchange, session_status, stop_service
 
@@ -49,9 +50,16 @@ class FakeBrowser:
     async def interactive(self, url: str, wait_seconds: float) -> PageSnapshot:
         return await self.fetch(url)
 
-    async def fetch_filters(self, url: str) -> PageSnapshot:
+    async def fetch_search(self, url: str) -> RawPayload:
+        return extract_search(await self.fetch(url))
+
+    async def fetch_listing(self, url: str) -> RawPayload:
+        return extract_listing(await self.fetch(url))
+
+    async def fetch_filters(self, url: str) -> RawPayload:
         self.filter_calls += 1
-        return await self.fetch(url)
+        snapshot = await self.fetch(url)
+        return RawPayload(kind="filters", url=url, fetched_at=snapshot.fetched_at, data=snapshot.data)
 
     async def close(self) -> None:
         self.closed += 1
@@ -157,6 +165,28 @@ async def test_filter_rpc_uses_shared_service_and_persists_challenge_cooldown(
             with pytest.raises(RateLimited):
                 await transport.fetch(snapshot.url)
             assert browser.filter_calls == 2 and browser.calls == 2
+            assert await stop_service(settings)
+
+
+async def test_listing_rpc_returns_raw_object_while_page_rpc_preserves_the_page(
+    settings: Settings, snapshot: PageSnapshot
+) -> None:
+    item = {"id": 123, "title": "Example", "price": "1,200"}
+    snapshot = snapshot.model_copy(
+        update={
+            "url": "https://www.yad2.co.il/market/item/123",
+            "data": {"props": {"pageProps": {"item": item}}},
+        }
+    )
+    browser = FakeBrowser(snapshot)
+    with anyio.fail_after(10):
+        async with anyio.create_task_group() as tasks:
+            await tasks.start(serve_browser, settings, lambda _: browser)
+            transport = SharedBrowserTransport(settings)
+            raw = await transport.fetch_listing(snapshot.url)
+            page = await transport.fetch(snapshot.url)
+            assert raw.kind == "listing" and raw.data == item
+            assert page.data == snapshot.data
             assert await stop_service(settings)
 
 

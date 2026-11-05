@@ -1,11 +1,14 @@
 from datetime import UTC, datetime
 from pathlib import Path
 
+import anyio
 import pytest
 from pydantic import JsonValue
 
 from yad2_client import Settings
+from yad2_client.http_state import BrowserState, HttpIdentity, StoredCookie
 from yad2_client.models import PageSnapshot
+from yad2_client.session import write_private
 
 
 @pytest.fixture
@@ -17,6 +20,31 @@ def anyio_backend() -> str:
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(data_dir=tmp_path / "data", cache_dir=tmp_path / "cache", min_interval_seconds=0)
+
+
+@pytest.fixture
+async def http_settings(settings: Settings) -> Settings:
+    settings = settings.model_copy(update={"transport": "http"})
+    await anyio.Path(settings.data_dir).mkdir(parents=True)
+    await write_private(settings.data_dir / "http-identity.json", HttpIdentity(user_agent="test-browser"))
+    await write_private(
+        settings.data_dir / "browser-state.json",
+        BrowserState(
+            cookies=[
+                StoredCookie(
+                    name="verified",
+                    value="original",
+                    domain=".yad2.co.il",
+                    path="/",
+                    expires=-1,
+                    secure=True,
+                    httpOnly=True,
+                )
+            ],
+            origins=[{"origin": "https://www.yad2.co.il", "localStorage": [{"name": "keep", "value": "untouched"}]}],
+        ),
+    )
+    return settings
 
 
 @pytest.fixture

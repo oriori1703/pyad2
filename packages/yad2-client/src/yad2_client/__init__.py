@@ -11,6 +11,7 @@ from yad2_client.models import (
     ListingAttribute,
     ListingResult,
     MarketSearch,
+    RawPayload,
     SearchAttribute,
     SearchBatch,
     SearchFilters,
@@ -19,11 +20,13 @@ from yad2_client.models import (
     SortOrder,
 )
 from yad2_client.settings import Settings
+from yad2_client.sources import DataSource
 
 __all__ = [
     "Attribute",
     "AttributeFilter",
     "CategoryResult",
+    "DataSource",
     "FilterOption",
     "HttpTransport",
     "Listing",
@@ -31,6 +34,7 @@ __all__ = [
     "ListingResult",
     "MarketSearch",
     "ProductType",
+    "RawPayload",
     "SearchAttribute",
     "SearchBatch",
     "SearchFilters",
