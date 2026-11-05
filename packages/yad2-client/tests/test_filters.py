@@ -92,7 +92,8 @@ def test_conflicting_collection_option_ids_are_preserved_with_warnings(snapshot:
 async def test_filter_cache_is_separate_and_bad_shapes_are_not_cached(
     settings: Settings, snapshot: PageSnapshot
 ) -> None:
-    transport = Mock()
+    # Runtime protocol checks on 3.11 use hasattr; do not fabricate optional methods.
+    transport = Mock(spec_set=["fetch", "fetch_filters", "close"])
     transport.fetch = AsyncMock(return_value=snapshot)
     transport.fetch_filters = AsyncMock(return_value=snapshot.model_copy(update={"data": {"data": {}}}))
     transport.close = AsyncMock()
