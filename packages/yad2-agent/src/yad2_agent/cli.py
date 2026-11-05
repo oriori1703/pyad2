@@ -11,6 +11,7 @@ import typer
 from pydantic import BaseModel
 
 from yad2_agent.page import PageView, inspect_page
+from yad2_agent.server import serve
 from yad2_agent.watches import WatchDefinition, WatchStore
 from yad2_client import MarketSearch, Settings, SortOrder, Yad2Client
 from yad2_client.cache import Cache
@@ -287,9 +288,4 @@ def cache_clear() -> None:
     typer.echo('{"cleared":true}')
 
 
-@app.command()
-def serve() -> None:
-    """Run the MCP server over stdio."""
-    from yad2_agent.server import main
-
-    main()
+app.command()(serve)

@@ -1,10 +1,12 @@
-"""MCP stdio server backed by the shared HTTP/browser service."""
+"""MCP stdio and Streamable HTTP server backed by the shared HTTP/browser service."""
 
 import json
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
+from enum import StrEnum
 from typing import Annotated, TypeVar
 
+import typer
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
@@ -194,5 +196,25 @@ def create_server(client: Yad2Client | None = None) -> MCPServer[None]:
     return server
 
 
+class MCPTransport(StrEnum):
+    STDIO = "stdio"
+    HTTP = "http"
+
+
+def serve(
+    transport: Annotated[
+        MCPTransport, typer.Option(help="MCP transport: stdio or Streamable HTTP.")
+    ] = MCPTransport.STDIO,
+    host: Annotated[str, typer.Option(help="HTTP bind address.")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535, help="HTTP listen port; endpoint is /mcp.")] = 8000,
+) -> None:
+    """Run the MCP server over stdio (default) or Streamable HTTP."""
+    server = create_server()
+    if transport == MCPTransport.HTTP:
+        server.run(transport="streamable-http", host=host, port=port)
+    else:
+        server.run(transport="stdio")
+
+
 def main() -> None:
-    create_server().run(transport="stdio")
+    typer.run(serve)

@@ -1,19 +1,60 @@
 import os
+import socket
+import subprocess
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
+import anyio
+import pytest
+from anyio.streams.buffered import BufferedByteReceiveStream
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
+from mcp.client.streamable_http import streamable_http_client
 
 from yad2_client.models import PageSnapshot
 
 
-async def test_stdio_round_trip_schemas_structured_results_and_errors(seeded_cache: PageSnapshot) -> None:
-    parameters = StdioServerParameters(
-        command=sys.executable,
-        args=["-c", "from yad2_agent.server import main; main()"],
-        env=dict(os.environ),
-    )
-    async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+@asynccontextmanager
+async def connect_server(transport: str) -> AsyncIterator[ClientSession]:
+    entrypoint = ["-c", "from yad2_agent.server import main; main()"]
+    if transport == "stdio":
+        parameters = StdioServerParameters(command=sys.executable, args=entrypoint, env=dict(os.environ))
+        async with stdio_client(parameters) as (read, write), ClientSession(read, write) as session:
+            yield session
+        return
+
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    if transport == "http-cli":
+        entrypoint = ["-c", "from yad2_agent.cli import app; app()", "serve"]
+    command = [sys.executable, *entrypoint, "--transport", "http", "--host", "127.0.0.1", "--port", str(port)]
+    async with await anyio.open_process(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE) as process:
+        try:
+            assert process.stderr is not None
+            with anyio.fail_after(15):
+                # Wait for the local socket to be bound, without probing Yad2 or retrying MCP calls.
+                await BufferedByteReceiveStream(process.stderr).receive_until(b"Uvicorn running on", 65536)
+                async with (
+                    streamable_http_client(f"http://127.0.0.1:{port}/mcp") as (read, write),
+                    ClientSession(read, write) as session,
+                ):
+                    yield session
+        finally:
+            with anyio.CancelScope(shield=True):
+                if process.returncode is None:
+                    process.terminate()
+                with anyio.move_on_after(5):
+                    await process.wait()
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+
+
+@pytest.mark.parametrize("transport", ["stdio", "http", "http-cli"])
+async def test_round_trip_schemas_structured_results_and_errors(seeded_cache: PageSnapshot, transport: str) -> None:
+    async with connect_server(transport) as session:
         await session.initialize()
         tools = (await session.list_tools()).tools
         assert {tool.name for tool in tools} == {

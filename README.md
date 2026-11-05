@@ -5,7 +5,7 @@ computer parts, and **all marketplace categories**. HTTP-first access uses verif
 structured page data, with Chromium for session verification and browser-only pages.
 
 - **`yad2-client`** — asynchronous, typed library; independently usable without MCP or Typer.
-- **`yad2-agent`** — JSON CLI and MCP stdio server built on the library.
+- **`yad2-agent`** — JSON CLI and MCP server with stdio and Streamable HTTP transports.
 - **Other sections** — normalized property/vehicle feeds and listing details through their existing URLs;
   bounded JSON inspection for other Next.js pages.
 
@@ -122,6 +122,31 @@ Add this to your MCP client's server configuration, replacing the absolute proje
 
 `uv run yad2 serve` is an equivalent stdio entry point. Install the browser before starting the server.
 Use an absolute path to `uv` if your desktop client's PATH does not include it.
+
+### Streamable HTTP
+
+Both entry points also support MCP over Streamable HTTP:
+
+```sh
+uv run yad2 serve --transport http --host 127.0.0.1 --port 8000
+# Equivalent:
+uv run yad2-mcp --transport http --host 127.0.0.1 --port 8000
+```
+
+Connect your MCP client to **`http://127.0.0.1:8000/mcp`**. For clients accepting URL-based server entries:
+
+```json
+{
+  "mcpServers": {
+    "yad2": {"url": "http://127.0.0.1:8000/mcp"}
+  }
+}
+```
+
+Stdio remains the default. HTTP defaults to the loopback address `127.0.0.1`, port `8000`, and uses the
+SDK's stateful Streamable HTTP sessions. It exposes the same tools and shared local searches/session
+state as stdio; it does not add authentication. Run separate processes to serve both transports at once.
+This MCP transport setting is independent of `YAD2_TRANSPORT`, which controls access to the Yad2 website.
 
 | Tool | Purpose |
 | --- | --- |
@@ -415,7 +440,7 @@ uv run pytest -m live tests/test_live.py
 Offline tests cover URL/filter validation, observed payload shapes, missing/malformed data, pagination,
 cache persistence/expiry, pacing, challenge cooldown, attribute normalization, saved-search concurrency,
 CLI output, cookie scope/persistence, HTTP cancellation, cross-client session updates, and a real MCP
-stdio subprocess round trip. Saved-search comparisons and conflict handling are tested offline.
+stdio and Streamable HTTP subprocess round trips. Saved-search comparisons and conflict handling are tested offline.
 CI runs offline checks only. The live example test may eventually fail when the listing expires.
 
 Live-verified on **2026-11-05**: the supplied item (NVIDIA 5070 ti, ₪3,500, Tel Aviv–Yafo), RTX searches,
