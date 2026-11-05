@@ -318,7 +318,8 @@ anyio.run(main, backend="asyncio")
 ```
 
 `Yad2Client(settings=Settings(...), transport=...)` supports explicit configuration and injectable async
-transports. Pure parsers consume `PageSnapshot` objects for offline tests. Package dependencies flow
+data sources. Pure parsers consume `RawPayload` objects; existing `PageSnapshot` inputs are also accepted
+through wrapper extraction. Package dependencies flow
 from agent → client, never the reverse.
 The default transport uses the shared service. For explicit in-process ownership, inject
 `BrowserTransport(settings)` from `yad2_client.browser` and close the client when finished; this mode
@@ -330,6 +331,49 @@ the shared default is preferred when CLI/MCP or multiple clients may run concurr
 Async orchestration uses AnyIO, including task groups, locks, worker threads, and filesystem access.
 Use AnyIO's `asyncio` backend for browser-backed operations because Patchright requires it. The test
 suite uses AnyIO's pytest plugin with the same backend.
+
+### Fetching / parsing boundary
+
+Both `BrowserTransport` and `HttpTransport` implement the public `DataSource` protocol:
+
+```python
+from yad2_client import DataSource, RawPayload
+from yad2_client.models import PageSnapshot
+
+# DataSource methods:
+# async fetch_search(url: str) -> RawPayload
+# async fetch_filters(url: str) -> RawPayload
+# async fetch_listing(url: str) -> RawPayload
+# async fetch(url: str) -> PageSnapshot  # Original page inspection / rendered category links
+# async close() -> None
+```
+
+`RawPayload` contains `kind`, `url`, `fetched_at`, `cached`, and the unmodified upstream JSON object in
+`data`. A search payload contains the feed object, a listing payload contains that listing's object,
+and a filter payload contains the filter object. Browser and HTTP sources remove their different
+outer wrappers and return the same contract; HTTP never constructs a synthetic Next.js page.
+
+```text
+Browser HTML / page JSON ──┐
+                          ├── RawPayload ── shared parser ── domain models
+HTTP API JSON / HTML ──────┘
+```
+
+- `extraction.py` locates JSON in the observed page/API wrappers and preserves the selected object.
+- `sources.py` defines the source interface; `browser.py` / `http.py` implement fetching and extraction.
+- `parsing.py`, `filters.py`, and `attributes.py` validate and normalize data without network access.
+- `client.py` invokes shared parsers and caches payloads only after successful domain validation.
+
+Sources handle network/challenge errors and malformed JSON, but do not validate listing titles,
+pagination consistency, or filter schemas. A successful HTTP response may update cookies even when
+its domain payload later fails validation. Such payloads are never cached as successful search results.
+Page inspection has its own `PageSnapshot` cache; it always exposes the original page structure.
+Normalized raw payloads use a versioned cache namespace shared by all source implementations.
+
+Custom sources can be injected with `Yad2Client(transport=source)`. Older custom transports implementing
+only `fetch` and `close` are adapted automatically for search/listing extraction. The shared-service
+protocol now carries raw payloads separately from page snapshots; restart existing MCP/service processes
+after upgrading. Public CLI/MCP search and listing result shapes are unchanged.
 
 ### Comparison-friendly listing attributes
 
