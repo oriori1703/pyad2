@@ -1,13 +1,14 @@
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import anyio
 import pytest
+from anyio.lowlevel import checkpoint
 
 from yad2_client import MarketSearch, Settings, Yad2Client
 from yad2_client.cache import Cache
 from yad2_client.errors import ChallengeRequired, ParseError, RateLimited
-from yad2_client.models import PageSnapshot
+from yad2_client.models import PageSnapshot, SearchResult
 
 
 class FakeTransport:
@@ -30,10 +31,15 @@ class FakeTransport:
 async def test_concurrent_identical_calls_fetch_once(settings: Settings, snapshot: PageSnapshot) -> None:
     transport = FakeTransport(snapshot)
     async with Yad2Client(settings, transport=transport) as client:
-        first, second = await asyncio.gather(
-            client.search(MarketSearch(query="RTX")), client.search(MarketSearch(query="RTX"))
-        )
-        assert not first.cached and second.cached
+        results: list[SearchResult] = []
+
+        async def search() -> None:
+            results.append(await client.search(MarketSearch(query="RTX")))
+
+        async with anyio.create_task_group() as tasks:
+            tasks.start_soon(search)
+            tasks.start_soon(search)
+        assert sorted(result.cached for result in results) == [False, True]
         assert transport.calls == 1
         fresh = await client.search(MarketSearch(query="RTX"), refresh=True)
         assert not fresh.cached and transport.calls == 2
@@ -90,7 +96,7 @@ async def test_invalid_url_never_reaches_transport(settings: Settings, snapshot:
 
 async def test_pacing_is_shared_between_cache_instances(tmp_path: Path) -> None:
     clock = AsyncMock()
-    with patch("yad2_client.cache.time.time", return_value=1000), patch("yad2_client.cache.asyncio.sleep", clock):
+    with patch("yad2_client.cache.time.time", return_value=1000), patch("yad2_client.cache.anyio.sleep", clock):
         await Cache(tmp_path).wait_turn(3)
         await Cache(tmp_path).wait_turn(3)
     clock.assert_awaited_once_with(3)
@@ -102,3 +108,17 @@ async def test_ttl_expiration(settings: Settings, snapshot: PageSnapshot) -> Non
         await cache.put(snapshot.url, snapshot)
     with patch("yad2_client.cache.time.time", return_value=1301):
         assert await cache.get(snapshot.url, 300) is None
+
+
+async def test_cancellation_still_closes_the_transport(settings: Settings, snapshot: PageSnapshot) -> None:
+    class ClosingTransport(FakeTransport):
+        async def close(self) -> None:
+            await checkpoint()
+            await super().close()
+
+    transport = ClosingTransport(snapshot)
+    with anyio.CancelScope() as scope:
+        async with Yad2Client(settings, transport=transport):
+            scope.cancel()
+            await checkpoint()
+    assert transport.closed

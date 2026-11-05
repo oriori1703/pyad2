@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Yad2 CLI and MCP tools for LLM agents"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["yad2-client", "typer>=0.16,<1", "mcp>=1.30,<2"]
+dependencies = ["anyio>=4.11,<5", "yad2-client", "typer>=0.16,<1", "mcp>=1.30,<2"]
 
 [project.scripts]
 yad2 = "yad2_agent.cli:app"

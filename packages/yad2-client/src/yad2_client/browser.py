@@ -1,6 +1,5 @@
 """Reusable Patchright browser with persisted first-party session state."""
 
-import asyncio
 import math
 import sys
 from datetime import UTC, datetime
@@ -9,6 +8,7 @@ from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
+import anyio
 from filelock import FileLock, Timeout
 from patchright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 from patchright.async_api import Error as PlaywrightError
@@ -61,7 +61,7 @@ class BrowserTransport:
     async def _start(self) -> Page:
         if self._page is not None:
             return self._page
-        await asyncio.to_thread(self.settings.data_dir.mkdir, parents=True, exist_ok=True, mode=0o700)
+        await anyio.Path(self.settings.data_dir).mkdir(parents=True, exist_ok=True, mode=0o700)
         self._profile_lock = FileLock(self.settings.data_dir / "browser.lock")
         try:
             self._profile_lock.acquire(timeout=0)
@@ -88,7 +88,7 @@ class BrowserTransport:
             self._context = await self._browser.new_context(
                 locale="he-IL",
                 user_agent=user_agent,
-                storage_state=self.state_path if await asyncio.to_thread(self.state_path.exists) else None,
+                storage_state=self.state_path if await anyio.Path(self.state_path).exists() else None,
             )
             self._page = await self._context.new_page()
             self._page.set_default_timeout(self.settings.timeout_seconds * 1000)
@@ -102,8 +102,8 @@ class BrowserTransport:
             # Write to a private temporary path and atomically replace the previous session.
             temporary = self.state_path.with_suffix(".tmp")
             await self._context.storage_state(path=temporary)
-            await asyncio.to_thread(temporary.chmod, 0o600)
-            await asyncio.to_thread(temporary.replace, self.state_path)
+            await anyio.Path(temporary).chmod(0o600)
+            await anyio.Path(temporary).replace(self.state_path)
 
     async def _snapshot(self, page: Page) -> PageSnapshot:
         url = validate_url(page.url)
@@ -162,14 +162,15 @@ class BrowserTransport:
             raise BrowserError(f"Interactive verification did not complete: {exc}") from exc
 
     async def close(self) -> None:
-        try:
-            if self._browser is not None:
-                await self._browser.close()
-        finally:
+        with anyio.CancelScope(shield=True):
             try:
-                if self._playwright is not None:
-                    await self._playwright.stop()
+                if self._browser is not None:
+                    await self._browser.close()
             finally:
-                if self._profile_lock is not None:
-                    self._profile_lock.release()
-                self._page = self._context = self._browser = self._playwright = self._profile_lock = None
+                try:
+                    if self._playwright is not None:
+                        await self._playwright.stop()
+                finally:
+                    if self._profile_lock is not None:
+                        self._profile_lock.release()
+                    self._page = self._context = self._browser = self._playwright = self._profile_lock = None

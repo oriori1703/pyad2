@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Typed, browser-backed access to Yad2 public listings"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["patchright>=1.56,<2", "platformdirs>=4,<5", "pydantic>=2.11,<3", "filelock>=3.18,<4"]
+dependencies = ["anyio>=4.11,<5", "patchright>=1.56,<2", "platformdirs>=4,<5", "pydantic>=2.11,<3", "filelock>=3.18,<4"]
 
 [build-system]
 requires = ["uv_build>=0.8.13,<0.14"]

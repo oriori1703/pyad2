@@ -156,7 +156,7 @@ MCP failures use protocol error results with actionable messages.
 ## Python library
 
 ```python
-import asyncio
+import anyio
 
 from yad2_client import MarketSearch, Yad2Client
 
@@ -171,12 +171,16 @@ async def main() -> None:
             print(details.listing.description)
 
 
-asyncio.run(main())
+anyio.run(main, backend="asyncio")
 ```
 
 `Yad2Client(settings=Settings(...), transport=...)` supports explicit configuration and injectable async
 transports. Pure parsers consume `PageSnapshot` objects for offline tests. Package dependencies flow
 from agent → client, never the reverse.
+
+Async orchestration uses AnyIO, including task groups, locks, worker threads, and filesystem access.
+Use AnyIO's `asyncio` backend for browser-backed operations because Patchright requires it. The test
+suite uses AnyIO's pytest plugin with the same backend.
 
 ### Product and attribute enums
 

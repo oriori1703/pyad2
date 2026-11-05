@@ -1,12 +1,12 @@
 """JSON-first command line interface; diagnostics never contaminate stdout."""
 
-import asyncio
 import json
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable
 from typing import Annotated
 
+import anyio
 import typer
 from pydantic import BaseModel
 
@@ -28,7 +28,7 @@ def _run(action: Callable[[Yad2Client], Awaitable[BaseModel]]) -> None:
             return await action(client)
 
     try:
-        result = asyncio.run(execute())
+        result = anyio.run(execute, backend="asyncio")
     except (Yad2Error, ValueError, OSError) as exc:
         _fail(exc)
     else:
@@ -160,7 +160,7 @@ def session(
 
     typer.echo("Complete any verification in the opened browser; it closes after a successful page load.", err=True)
     try:
-        asyncio.run(verify())
+        anyio.run(verify, backend="asyncio")
     except (Yad2Error, ValueError, OSError) as exc:
         _fail(exc)
     typer.echo('{"verified":true}')
@@ -170,7 +170,7 @@ def session(
 def cache_clear() -> None:
     """Delete cached pages (request cooldown remains in effect)."""
     try:
-        asyncio.run(Cache(Settings.from_env().cache_dir).clear())
+        anyio.run(Cache(Settings.from_env().cache_dir).clear, backend="asyncio")
     except (ValueError, OSError) as exc:
         _fail(exc)
     typer.echo('{"cleared":true}')

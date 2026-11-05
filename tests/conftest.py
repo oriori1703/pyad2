@@ -10,6 +10,12 @@ from yad2_client.urls import market_url
 
 
 @pytest.fixture
+def anyio_backend() -> str:
+    """Patchright's browser transport requires the asyncio backend."""
+    return "asyncio"
+
+
+@pytest.fixture
 def agent_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
     settings = Settings(data_dir=tmp_path / "data", cache_dir=tmp_path / "cache", min_interval_seconds=0)
     monkeypatch.setenv("YAD2_DATA_DIR", str(settings.data_dir))
@@ -18,7 +24,7 @@ def agent_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Settings:
 
 
 @pytest.fixture
-async def seeded_cache(agent_settings: Settings) -> PageSnapshot:
+async def seeded_cache(agent_settings: Settings, anyio_backend: str) -> PageSnapshot:
     snapshot = PageSnapshot(
         url=market_url(MarketSearch(query="RTX")),
         fetched_at=datetime.now(UTC),

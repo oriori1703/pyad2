@@ -1,8 +1,9 @@
 """Async client shared by human and agent interfaces."""
 
-import asyncio
 from types import TracebackType
 from typing import Self
+
+import anyio
 
 from yad2_client.browser import BrowserTransport, Transport
 from yad2_client.cache import Cache
@@ -18,7 +19,7 @@ class Yad2Client:
         self.settings = settings or Settings.from_env()
         self.transport = transport or BrowserTransport(self.settings)
         self.cache = Cache(self.settings.cache_dir)
-        self._lock = asyncio.Lock()
+        self._lock = anyio.Lock()
 
     async def __aenter__(self) -> Self:
         return self
@@ -29,7 +30,8 @@ class Yad2Client:
         await self.close()
 
     async def close(self) -> None:
-        await self.transport.close()
+        with anyio.CancelScope(shield=True):
+            await self.transport.close()
 
     async def _load(self, url: str, refresh: bool) -> PageSnapshot:
         if not refresh:

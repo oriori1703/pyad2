@@ -1,12 +1,13 @@
 """Capture authenticated GET metadata sequentially, or regenerate from a complete local capture."""
 
 import argparse
-import asyncio
 import json
 import subprocess
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path
 
+import anyio
 from pydantic import JsonValue, TypeAdapter
 
 from yad2_client.browser import BrowserTransport
@@ -29,7 +30,7 @@ class CatalogResponse(Model):
 async def capture(directory: Path, *, login: bool) -> None:
     settings = Settings.from_env().model_copy(update={"headless": False})
     browser = BrowserTransport(settings)
-    await asyncio.to_thread((directory / "attributes").mkdir, parents=True, exist_ok=True)
+    await anyio.Path(directory / "attributes").mkdir(parents=True, exist_ok=True)
     try:
         page = await browser._start()
         if login:
@@ -45,9 +46,9 @@ async def capture(directory: Path, *, login: bool) -> None:
             await page.goto("https://www.yad2.co.il/publish-ad-products/create", wait_until="load")
 
         async def fetch(path: Path, suffix: str) -> JsonValue:
-            if await asyncio.to_thread(path.exists):
-                return JSON.validate_json(await asyncio.to_thread(path.read_text, encoding="utf-8"))
-            await asyncio.sleep(max(3, settings.min_interval_seconds))
+            if await anyio.Path(path).exists():
+                return JSON.validate_json(await anyio.Path(path).read_text(encoding="utf-8"))
+            await anyio.sleep(max(3, settings.min_interval_seconds))
             result = CatalogResponse.model_validate(
                 await page.evaluate(
                     """async url => {
@@ -73,9 +74,7 @@ async def capture(directory: Path, *, login: bool) -> None:
                 raise ParseError("Catalog endpoint returned non-JSON content") from exc
             if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
                 raise ParseError("Catalog endpoint did not return a data array")
-            await asyncio.to_thread(
-                path.write_text, json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            await anyio.Path(path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             await browser._save_state()
             return payload
 
@@ -127,7 +126,7 @@ def main() -> None:
     parser.add_argument("--login", action="store_true", help="Wait for interactive sign-in before fetching")
     args = parser.parse_args()
     if args.fetch or args.login:
-        asyncio.run(capture(args.capture_dir, login=args.login))
+        anyio.run(partial(capture, args.capture_dir, login=args.login), backend="asyncio")
     generate(args.capture_dir)
 
 

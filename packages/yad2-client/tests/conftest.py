@@ -9,6 +9,12 @@ from yad2_client.models import PageSnapshot
 
 
 @pytest.fixture
+def anyio_backend() -> str:
+    """Patchright's browser transport requires the asyncio backend."""
+    return "asyncio"
+
+
+@pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     return Settings(data_dir=tmp_path / "data", cache_dir=tmp_path / "cache", min_interval_seconds=0)
 

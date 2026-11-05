@@ -1032,19 +1032,6 @@ wheels = [
 ]
 
 [[package]]
-name = "pytest-asyncio"
-version = "1.4.1.post1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "pytest" },
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/73/7f/c60a4338420b33453d4f814ac0c930abd399f162b9bdd21af4b9e363037f/pytest_asyncio-1.4.1.post1.tar.gz", hash = "sha256:f582d9ea4a1c082195abe8bd29a1fe106aeb1cd435e3dad2d3bc2749935c36a2", size = 145360, upload-time = "2026-11-01T18:26:03.732Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/de/adbc7578959cfab07e5e7c05cf6d54224a51e7667ea2c07458b6bc571e75/pytest_asyncio-1.4.1.post1-py3-none-any.whl", hash = "sha256:0755e488cc0a2b9bd2eab7292cc6390d4cbb8390f1020745647bae5a708e0165", size = 17140, upload-time = "2026-11-01T18:26:02.168Z" },
-]
-
-[[package]]
 name = "python-dotenv"
 version = "1.2.4"
 source = { registry = "https://pypi.org/simple" }
@@ -1360,6 +1347,7 @@ name = "yad2-agent"
 version = "0.1.0"
 source = { editable = "packages/yad2-agent" }
 dependencies = [
+    { name = "anyio" },
     { name = "mcp" },
     { name = "typer" },
     { name = "yad2-client" },
@@ -1367,6 +1355,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.11,<5" },
     { name = "mcp", specifier = ">=1.30,<2" },
     { name = "typer", specifier = ">=0.16,<1" },
     { name = "yad2-client", editable = "packages/yad2-client" },
@@ -1377,6 +1366,7 @@ name = "yad2-client"
 version = "0.1.0"
 source = { editable = "packages/yad2-client" }
 dependencies = [
+    { name = "anyio" },
     { name = "filelock" },
     { name = "patchright" },
     { name = "platformdirs" },
@@ -1385,6 +1375,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "anyio", specifier = ">=4.11,<5" },
     { name = "filelock", specifier = ">=3.18,<4" },
     { name = "patchright", specifier = ">=1.56,<2" },
     { name = "platformdirs", specifier = ">=4,<5" },
@@ -1400,7 +1391,6 @@ source = { virtual = "." }
 dev = [
     { name = "mypy" },
     { name = "pytest" },
-    { name = "pytest-asyncio" },
     { name = "ruff" },
 ]
 
@@ -1410,6 +1400,5 @@ dev = [
 dev = [
     { name = "mypy", specifier = ">=1.15" },
     { name = "pytest", specifier = ">=8" },
-    { name = "pytest-asyncio", specifier = ">=1" },
     { name = "ruff", specifier = ">=0.11" },
 ]

@@ -1,12 +1,12 @@
 """Bounded SQLite cache and cross-process request budget. All I/O is off-loop."""
 
-import asyncio
 import sqlite3
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+import anyio
 from pydantic import ValidationError
 
 from yad2_client.errors import RateLimited
@@ -41,7 +41,7 @@ class Cache:
         return snapshot.model_copy(update={"cached": True})
 
     async def get(self, url: str, ttl: float) -> PageSnapshot | None:
-        return await asyncio.to_thread(self._get, url, ttl)
+        return await anyio.to_thread.run_sync(self._get, url, ttl)
 
     def _put(self, url: str, snapshot: PageSnapshot) -> None:
         with self._connect() as connection:
@@ -54,7 +54,7 @@ class Cache:
             )
 
     async def put(self, url: str, snapshot: PageSnapshot) -> None:
-        await asyncio.to_thread(self._put, url, snapshot)
+        await anyio.to_thread.run_sync(self._put, url, snapshot)
 
     def _reserve(self, interval: float) -> float:
         with self._connect() as connection:
@@ -71,9 +71,9 @@ class Cache:
             return scheduled - now
 
     async def wait_turn(self, interval: float) -> None:
-        delay = await asyncio.to_thread(self._reserve, interval)
+        delay = await anyio.to_thread.run_sync(self._reserve, interval)
         if delay > 0:
-            await asyncio.sleep(delay)
+            await anyio.sleep(delay)
 
     def _block(self, seconds: float) -> None:
         with self._connect() as connection:
@@ -84,7 +84,7 @@ class Cache:
             )
 
     async def block(self, seconds: float) -> None:
-        await asyncio.to_thread(self._block, seconds)
+        await anyio.to_thread.run_sync(self._block, seconds)
 
     def _clear(self) -> None:
         with self._connect() as connection:
@@ -92,7 +92,7 @@ class Cache:
 
     async def clear(self) -> None:
         """Clear cached pages without resetting the request budget."""
-        await asyncio.to_thread(self._clear)
+        await anyio.to_thread.run_sync(self._clear)
 
     def _reset_cooldown(self) -> None:
         with self._connect() as connection:
@@ -100,4 +100,4 @@ class Cache:
 
     async def reset_cooldown(self) -> None:
         """Called only after a successful interactive browser session."""
-        await asyncio.to_thread(self._reset_cooldown)
+        await anyio.to_thread.run_sync(self._reset_cooldown)
