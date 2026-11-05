@@ -23,10 +23,14 @@ async def test_stdio_round_trip_schemas_structured_results_and_errors(seeded_cac
             "list_categories",
             "list_product_types",
             "list_attributes",
+            "get_session_status",
             "inspect_page",
         }
         assert all(tool.output_schema for tool in tools)
         assert all(tool.annotations is not None and tool.annotations.read_only_hint for tool in tools)
+        status = await session.call_tool("get_session_status", {})
+        assert not status.is_error and status.structured_content is not None
+        assert status.structured_content["service_state"] == "stopped"
         products = await session.call_tool("list_product_types", {"query": "computer"})
         assert not products.is_error and products.structured_content is not None
         assert "285" in {product["id"] for product in products.structured_content["products"]}

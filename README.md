@@ -82,6 +82,7 @@ Use an absolute path to `uv` if your desktop client's PATH does not include it.
 | `list_attributes` | Offline product-specific attributes, input types, and option IDs |
 | `search_url` | Marketplace, property, and vehicle feeds with their existing URL filters |
 | `inspect_page` | Bounded Next.js JSON inspection using a dot path |
+| `get_session_status` | Local service/browser owner, saved-session metadata, and cooldown diagnostics |
 
 All tools declare input/output schemas, structured results, and read-only annotations. Example call:
 
@@ -99,8 +100,9 @@ All tools declare input/output schemas, structured results, and read-only annota
 }
 ```
 
-The server owns one lazy browser session and serializes navigation. Concurrent identical requests are
-coalesced through the cache. Listing descriptions remain untrusted seller content.
+A local service owns one lazy browser session shared by CLI and MCP processes. It serializes navigation
+and enforces pacing and cooldown at the front of its request queue. Each client coalesces concurrent
+identical requests through the shared disk cache. Listing descriptions remain untrusted seller content.
 
 ## Browser access and blocking
 
@@ -123,9 +125,36 @@ uv run yad2 session
 ```
 
 A visible browser opens for up to three minutes. Complete verification there; a successful page load saves
-the session and clears the cooldown. A blocked MCP request releases its browser lock so this command can
-run while the MCP process remains alive. Otherwise only one browser owner per data directory is allowed;
-close a running owner before opening a second one.
+the session and clears the cooldown. Verification uses the same service queue: it closes the headless
+browser, opens a visible one, and restores normal browsing afterward. MCP can remain connected.
+
+### Shared browser and diagnostics
+
+CLI commands and MCP automatically connect to one local service per `YAD2_DATA_DIR`. The first uncached
+browser request starts it; closing a CLI client or MCP connection leaves it available for other clients.
+After five minutes without requests it closes the browser and exits. Cached/offline operations do not
+start it. The service listens only on loopback and authenticates requests using a private local token.
+
+```sh
+# Inspect ownership and cooldown without starting a service or navigating Yad2.
+uv run yad2 status
+
+# Stop the service once its requests have finished; the next browser request starts it again.
+uv run yad2 browser-stop
+```
+
+`status` returns JSON with the service PID, current operation, queue length, actual browser-lock owner,
+saved-state timestamp, cached-page count, and remaining cooldown. Credentials and cookies are omitted.
+Saved-state presence does not assert that an account login is still valid. Ordinary public searches do
+not require account login; a complete taxonomy refresh does.
+
+**Upgrading an already running MCP server:** restart it once so it loads the shared-service implementation.
+An older process or a direct catalog capture can still own the exclusive browser lock; `status` identifies
+this situation. Finish that operation before using the shared service. When changing service settings,
+run `browser-stop` first. Startup diagnostics are in `browser-service.log` in the private data directory.
+
+Clients wait up to two minutes in the queue. A lost service connection is reported without replaying a
+browser request. After a service crash, a subsequent command can start a new service using the saved state.
 
 No method guarantees permanent access: Yad2 can change its challenges, page schemas, or availability.
 Challenges are errors, never disguised as empty search results. There are no automatic retry loops.
@@ -144,6 +173,9 @@ Constructor settings and equivalent environment variables:
 | `YAD2_MIN_INTERVAL_SECONDS` | `3` | Minimum spacing between page navigations |
 | `YAD2_CACHE_TTL_SECONDS` | `300` | Cache freshness; `0` disables cache reads |
 | `YAD2_COOLDOWN_SECONDS` | `300` | Minimum cooldown after a block |
+| `YAD2_SERVICE_IDLE_SECONDS` | `300` | Idle time before the shared browser service exits |
+| `YAD2_SERVICE_START_TIMEOUT_SECONDS` | `20` | Maximum wait for local service startup |
+| `YAD2_BROWSER_QUEUE_TIMEOUT_SECONDS` | `120` | Maximum wait for another browser operation to finish |
 
 State is outside the repository. Browser state files are saved with owner-only permissions. On macOS,
 default state is under `~/Library/Application Support/yad2` and cache under `~/Library/Caches/yad2`.
@@ -177,6 +209,9 @@ anyio.run(main, backend="asyncio")
 `Yad2Client(settings=Settings(...), transport=...)` supports explicit configuration and injectable async
 transports. Pure parsers consume `PageSnapshot` objects for offline tests. Package dependencies flow
 from agent → client, never the reverse.
+The default transport uses the shared service. For explicit in-process ownership, inject
+`BrowserTransport(settings)` from `yad2_client.browser` and close the client when finished; this mode
+holds the exclusive browser lock and is intended for standalone browser workflows.
 
 Async orchestration uses AnyIO, including task groups, locks, worker threads, and filesystem access.
 Use AnyIO's `asyncio` backend for browser-backed operations because Patchright requires it. The test
@@ -233,6 +268,7 @@ capture directory for a new snapshot; reuse it only to resume an interrupted cap
 
 ```sh
 # Sign in locally and leave the browser open; metadata is stored outside the repository.
+uv run yad2 browser-stop
 uv run python tools/update_catalog.py --login --capture-dir "$HOME/.cache/yad2-catalog-2026-11-05"
 
 # Resume using the saved session and already captured responses.

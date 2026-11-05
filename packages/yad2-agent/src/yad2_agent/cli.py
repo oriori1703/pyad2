@@ -12,11 +12,11 @@ from pydantic import BaseModel
 
 from yad2_agent.page import PageView, inspect_page
 from yad2_client import MarketSearch, Settings, SortOrder, Yad2Client
-from yad2_client.browser import BrowserTransport
 from yad2_client.cache import Cache
 from yad2_client.catalog import catalog_product, catalog_products, resolve_product_type
 from yad2_client.errors import ChallengeRequired, RateLimited, Yad2Error
 from yad2_client.models import AttributeFilter
+from yad2_client.shared_browser import SharedBrowserTransport, session_status, stop_service
 
 app = typer.Typer(no_args_is_help=True, help="Search Yad2 listings. JSON on stdout; errors on stderr.")
 Refresh = Annotated[bool, typer.Option(help="Fetch fresh data instead of using the cache.")]
@@ -150,11 +150,10 @@ def session(
     """Open a visible browser for verification and save the session when a real page loads."""
 
     async def verify() -> None:
-        settings = Settings.from_env().model_copy(update={"headless": False})
-        browser = BrowserTransport(settings)
+        settings = Settings.from_env()
+        browser = SharedBrowserTransport(settings)
         try:
             await browser.interactive(url, wait_seconds)
-            await Cache(settings.cache_dir).reset_cooldown()
         finally:
             await browser.close()
 
@@ -164,6 +163,28 @@ def session(
     except (Yad2Error, ValueError, OSError) as exc:
         _fail(exc)
     typer.echo('{"verified":true}')
+
+
+@app.command()
+def status() -> None:
+    """Show local service, browser owner, saved-session metadata and cooldown as JSON."""
+    try:
+        result = anyio.run(session_status, Settings.from_env(), backend="asyncio")
+    except (Yad2Error, ValueError, OSError) as exc:
+        _fail(exc)
+    else:
+        typer.echo(result.model_dump_json(indent=2))
+
+
+@app.command("browser-stop")
+def browser_stop() -> None:
+    """Stop an idle shared browser service; the next browser request starts it again."""
+    try:
+        stopped = anyio.run(stop_service, Settings.from_env(), backend="asyncio")
+    except (Yad2Error, ValueError, OSError) as exc:
+        _fail(exc)
+    else:
+        typer.echo(json.dumps({"stopped": stopped}))
 
 
 @app.command("cache-clear")

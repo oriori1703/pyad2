@@ -40,6 +40,20 @@ def test_help_lists_agent_commands() -> None:
         assert command in result.stdout
 
 
+def test_status_does_not_start_a_service_or_browser(agent_settings: Settings) -> None:
+    result = CliRunner().invoke(app, ["status"])
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.stdout)
+    assert payload["service_state"] == "stopped"
+    assert payload["browser_lock"] == {"locked": False, "owner": None}
+    assert payload["saved_state_exists"] is False
+    assert payload["cache"]["cooldown_remaining_seconds"] == 0
+    assert not agent_settings.data_dir.exists()
+    stopped = CliRunner().invoke(app, ["browser-stop"])
+    assert stopped.exit_code == 0
+    assert json.loads(stopped.stdout) == {"stopped": False}
+
+
 def test_offline_catalog_commands_and_unknown_product_errors(agent_settings: Settings) -> None:
     products = CliRunner().invoke(app, ["product-types", "--query", "computer"])
     assert products.exit_code == 0, products.output
