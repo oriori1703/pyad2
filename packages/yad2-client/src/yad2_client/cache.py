@@ -3,7 +3,7 @@
 import sqlite3
 import time
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 import anyio
@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from yad2_client.errors import RateLimited
 from yad2_client.models import PageSnapshot
+from yad2_client.session import CacheStatus
 
 
 class Cache:
@@ -101,3 +102,24 @@ class Cache:
     async def reset_cooldown(self) -> None:
         """Called only after a successful interactive browser session."""
         await anyio.to_thread.run_sync(self._reset_cooldown)
+
+    def _status(self) -> CacheStatus:
+        if not self.path.exists():
+            return CacheStatus()
+        try:
+            with closing(sqlite3.connect(self.path.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
+                values = {str(row[0]): float(row[1]) for row in connection.execute("SELECT key, value FROM budget")}
+                count = connection.execute("SELECT COUNT(*) FROM pages").fetchone()[0]
+        except sqlite3.DatabaseError as exc:
+            return CacheStatus(
+                cached_pages=None, cooldown_remaining_seconds=None, next_request_in_seconds=None, error=str(exc)
+            )
+        now = time.time()
+        return CacheStatus(
+            cached_pages=count,
+            cooldown_remaining_seconds=max(0, values.get("blocked_until", 0) - now),
+            next_request_in_seconds=max(0, values.get("next_request", 0) - now),
+        )
+
+    async def status(self) -> CacheStatus:
+        return await anyio.to_thread.run_sync(self._status)

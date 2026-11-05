@@ -11,13 +11,14 @@ from yad2_client.errors import ChallengeRequired, ParseError, RateLimited
 from yad2_client.models import CategoryResult, ListingResult, MarketSearch, PageSnapshot, SearchResult
 from yad2_client.parsing import parse_categories, parse_item, parse_search
 from yad2_client.settings import Settings
+from yad2_client.shared_browser import SharedBrowserTransport
 from yad2_client.urls import ORIGIN, listing_url, market_url, validate_url
 
 
 class Yad2Client:
     def __init__(self, settings: Settings | None = None, *, transport: Transport | None = None) -> None:
         self.settings = settings or Settings.from_env()
-        self.transport = transport or BrowserTransport(self.settings)
+        self.transport = transport or SharedBrowserTransport(self.settings)
         self.cache = Cache(self.settings.cache_dir)
         self._lock = anyio.Lock()
 
@@ -38,12 +39,15 @@ class Yad2Client:
             cached = await self.cache.get(url, self.settings.cache_ttl_seconds)
             if cached is not None:
                 return cached
-        await self.cache.wait_turn(self.settings.min_interval_seconds)
+        shared = isinstance(self.transport, SharedBrowserTransport)
+        if not shared:
+            await self.cache.wait_turn(self.settings.min_interval_seconds)
         try:
             return await self.transport.fetch(url)
         except (ChallengeRequired, RateLimited):
-            retry_after = self.transport.retry_after if isinstance(self.transport, BrowserTransport) else 0
-            await self.cache.block(max(self.settings.cooldown_seconds, retry_after))
+            if not shared:
+                retry_after = self.transport.retry_after if isinstance(self.transport, BrowserTransport) else 0
+                await self.cache.block(max(self.settings.cooldown_seconds, retry_after))
             # Release the session lock so `yad2 session` can repair it while an MCP server stays running.
             await self.transport.close()
             raise

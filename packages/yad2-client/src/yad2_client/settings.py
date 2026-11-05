@@ -18,6 +18,9 @@ class Settings(Model):
     min_interval_seconds: float = Field(default=3, ge=0)
     cache_ttl_seconds: float = Field(default=300, ge=0)
     cooldown_seconds: float = Field(default=300, ge=0)
+    service_idle_seconds: float = Field(default=300, ge=1)
+    service_start_timeout_seconds: float = Field(default=20, ge=1)
+    browser_queue_timeout_seconds: float = Field(default=120, ge=1)
 
     @classmethod
     def from_env(cls) -> "Settings":

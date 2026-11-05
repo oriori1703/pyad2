@@ -17,6 +17,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from yad2_client.errors import BrowserError, ChallengeRequired, PageUnavailable, ParseError, RateLimited
 from yad2_client.models import Link, PageSnapshot
+from yad2_client.session import browser_lock_status, new_owner, write_private
 from yad2_client.settings import Settings
 from yad2_client.urls import validate_url
 
@@ -58,6 +59,10 @@ class BrowserTransport:
     def state_path(self) -> Path:
         return self.settings.data_dir / "browser-state.json"
 
+    @property
+    def running(self) -> bool:
+        return self._browser is not None
+
     async def _start(self) -> Page:
         if self._page is not None:
             return self._page
@@ -67,8 +72,14 @@ class BrowserTransport:
             self._profile_lock.acquire(timeout=0)
         except Timeout as exc:
             self._profile_lock = None
-            raise BrowserError("The Yad2 browser session is in use. Close the other CLI/MCP process first.") from exc
+            status = await anyio.to_thread.run_sync(browser_lock_status, self.settings)
+            owner = f" by PID {status.owner.pid}" if status.owner else " by another process"
+            raise BrowserError(
+                f"The Yad2 browser session is in use{owner}. Run `yad2 status` for details. "
+                "Restart older CLI/MCP processes to enable shared browser access, or finish the active catalog capture."
+            ) from exc
         try:
+            await write_private(self.settings.data_dir / "browser-owner.json", new_owner("browser"))
             self._playwright = await async_playwright().start()
             self._browser = await self._playwright.chromium.launch(
                 headless=self.settings.headless, channel=self.settings.channel
@@ -172,5 +183,8 @@ class BrowserTransport:
                         await self._playwright.stop()
                 finally:
                     if self._profile_lock is not None:
-                        self._profile_lock.release()
+                        try:
+                            await anyio.Path(self.settings.data_dir / "browser-owner.json").unlink(missing_ok=True)
+                        finally:
+                            self._profile_lock.release()
                     self._page = self._context = self._browser = self._playwright = self._profile_lock = None
