@@ -36,8 +36,12 @@ extend-select = ["I", "UP", "B", "ASYNC", "BLE", "C4", "DTZ", "ICN", "PIE", "PTH
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
 
+[tool.ruff.lint.isort]
+known-first-party = ["yad2_client", "yad2_agent"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests", "packages/yad2-client/tests"]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 addopts = "-m 'not live'"
 markers = ["live: opt-in tests accessing Yad2 with an installed browser"]
