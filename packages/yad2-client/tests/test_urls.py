@@ -3,6 +3,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from yad2_client import MarketSearch
+from yad2_client.models import AttributeFilter
 from yad2_client.urls import listing_url, market_url, validate_url
 
 
@@ -51,3 +52,19 @@ def test_bad_filter_ranges() -> None:
         MarketSearch(cities=("Tel Aviv",))
     with pytest.raises(ValueError):
         MarketSearch(collection="../bad")
+
+
+def test_attribute_option_filters_use_observed_query_shape() -> None:
+    search = MarketSearch(
+        product_types=("285",),
+        attributes=(AttributeFilter(attribute_id="155", values=("13287", "13285")),),
+    )
+    params = parse_qs(urlsplit(market_url(search)).query)
+    assert params["attr_155"] == ["13287,13285"]
+    assert params["productTypes"] == ["285"]
+    with pytest.raises(ValueError, match="Combine options"):
+        MarketSearch(attributes=search.attributes * 2)
+    with pytest.raises(ValueError):
+        AttributeFilter(attribute_id="155&x=1", values=("13287",))
+    with pytest.raises(ValueError):
+        AttributeFilter(attribute_id="155", values=())

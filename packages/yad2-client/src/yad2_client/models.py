@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Self
+from typing import Annotated, Self
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
@@ -19,6 +19,13 @@ class SortOrder(StrEnum):
     OLDEST = "oldest"
 
 
+class AttributeFilter(Model):
+    """One observed attr_<id> option filter; enum members work as string IDs."""
+
+    attribute_id: str = Field(pattern=r"^[0-9]+$")
+    values: tuple[Annotated[str, Field(pattern=r"^[0-9]+$")], ...] = Field(min_length=1)
+
+
 class MarketSearch(Model):
     query: str = Field(default="", max_length=500)
     collection: str | None = Field(default=None, pattern=r"^[a-z0-9][a-z0-9_-]*$")
@@ -28,6 +35,7 @@ class MarketSearch(Model):
     areas: tuple[str, ...] = ()
     product_types: tuple[str, ...] = ()
     conditions: tuple[str, ...] = ()
+    attributes: tuple[AttributeFilter, ...] = ()
     sort: SortOrder = SortOrder.RELEVANCE
     page: int = Field(default=1, ge=1, le=10000)
 
@@ -38,6 +46,8 @@ class MarketSearch(Model):
         for values in (self.cities, self.areas, self.product_types, self.conditions):
             if any(not value.isascii() or not value.isdigit() for value in values):
                 raise ValueError("Filter IDs must be numeric strings obtained from Yad2")
+        if len({attribute.attribute_id for attribute in self.attributes}) != len(self.attributes):
+            raise ValueError("Combine options for the same attribute into one filter")
         return self
 
 

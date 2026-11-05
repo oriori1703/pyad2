@@ -37,6 +37,8 @@ def market_url(search: MarketSearch) -> str:
     for key, price in (("minPrice", search.min_price), ("maxPrice", search.max_price)):
         if price is not None:
             params[key] = str(price)
+    for attribute in search.attributes:
+        params[f"attr_{attribute.attribute_id}"] = ",".join(attribute.values)
     return f"{ORIGIN}{path}?{urlencode({key: value for key, value in params.items() if value})}"
 
 
