@@ -4,6 +4,8 @@ import json
 import subprocess
 import sys
 from collections.abc import Awaitable, Callable
+from functools import partial
+from pathlib import Path
 from typing import Annotated
 
 import anyio
@@ -18,11 +20,15 @@ from yad2_client.cache import Cache
 from yad2_client.catalog import catalog_product, catalog_products, resolve_product_type
 from yad2_client.errors import ChallengeRequired, RateLimited, Yad2Error
 from yad2_client.models import AttributeFilter
+from yad2_client.session import write_private
+from yad2_client.session_bundle import export_session, import_session, parse_bundle
 from yad2_client.shared_browser import SharedBrowserTransport, session_status, stop_service
 
 app = typer.Typer(no_args_is_help=True, help="Search Yad2 listings. JSON on stdout; errors on stderr.")
 watch_app = typer.Typer(no_args_is_help=True, help="Save searches locally and check for listing changes.")
 app.add_typer(watch_app, name="watch")
+session_app = typer.Typer(invoke_without_command=True)
+app.add_typer(session_app, name="session")
 Refresh = Annotated[bool, typer.Option(help="Fetch fresh data instead of using the cache.")]
 
 
@@ -233,12 +239,18 @@ def install_browser() -> None:
     raise typer.Exit(result.returncode)
 
 
-@app.command()
+@session_app.callback()
 def session(
+    context: typer.Context,
     url: str = "https://www.yad2.co.il/market/search?q=RTX",
     wait_seconds: Annotated[float, typer.Option(min=1, max=600)] = 180,
 ) -> None:
-    """Open a visible browser for verification and save the session when a real page loads."""
+    """Open a visible browser for verification and save the session when a real page loads.
+
+    The export/import subcommands move a verified session to a machine without a display.
+    """
+    if context.invoked_subcommand is not None:
+        return
 
     async def verify() -> None:
         settings = Settings.from_env()
@@ -254,6 +266,43 @@ def session(
     except (Yad2Error, ValueError, OSError) as exc:
         _fail(exc)
     typer.echo('{"verified":true}')
+
+
+@session_app.command("export")
+def session_export(
+    output: Annotated[str, typer.Argument(help="Bundle file to create (owner-only), or - for stdout.")],
+) -> None:
+    """Write the verified session's Yad2 cookies and user agent to a portable bundle.
+
+    Cookies for other sites, local storage and Yad2 account tokens are left out.
+    """
+    try:
+        bundle = anyio.run(export_session, Settings.from_env(), backend="asyncio")
+        if output != "-":
+            anyio.run(write_private, Path(output), bundle, backend="asyncio")
+    except (Yad2Error, ValueError, OSError) as exc:
+        _fail(exc)
+    typer.echo("The bundle is a credential for this Yad2 session: transfer it privately, then delete it.", err=True)
+    if output == "-":
+        typer.echo(bundle.model_dump_json())
+    else:
+        typer.echo(json.dumps({"exported": True, "path": output, "cookies": len(bundle.cookies)}))
+
+
+@session_app.command("import")
+def session_import(
+    source: Annotated[str, typer.Argument(help="Bundle file from `yad2 session export`, or - for stdin.")],
+    replace: Annotated[bool, typer.Option(help="Overwrite a session already saved on this machine.")] = False,
+) -> None:
+    """Install an exported session so HTTP reads work without opening a browser here."""
+    try:
+        bundle = parse_bundle(sys.stdin.read() if source == "-" else Path(source).read_text("utf-8"))
+        anyio.run(partial(import_session, Settings.from_env(), bundle, replace=replace), backend="asyncio")
+    except (Yad2Error, ValueError, OSError) as exc:
+        _fail(exc)
+    typer.echo(
+        json.dumps({"imported": True, "cookies": len(bundle.cookies), "exported_at": bundle.exported_at.isoformat()})
+    )
 
 
 @app.command()

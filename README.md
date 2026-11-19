@@ -237,6 +237,35 @@ A visible browser opens for up to three minutes. Complete verification there; a 
 the cookies and matching user agent and clears the cooldown. Verification uses the same service queue
 and closes Chromium afterward. MCP can remain connected; subsequent HTTP reads reload the saved state.
 
+### Machines without a display
+
+Verification needs a visible browser. For a server or cloud machine, verify on a desktop and move the
+session over:
+
+```sh
+# On the desktop, after `yad2 session`:
+yad2 session export yad2-session.json
+
+# On the headless machine, after copying the file privately:
+yad2 session import yad2-session.json
+rm yad2-session.json
+
+# Or without an intermediate file:
+yad2 session export - | ssh user@host \
+  'uvx --from git+https://github.com/oriori1703/pyad2#subdirectory=packages/yad2-agent yad2 session import -'
+```
+
+The bundle holds the unexpired `yad2.co.il` cookies and the matching user agent, which is all that HTTP
+reads send. Cookies for other sites, local storage, and the `access_token`/`refresh_token` account
+cookies stay behind, so a sign-in made for the catalog refresh is not carried over. Remaining Yad2
+cookies include analytics identifiers. Treat the bundle as a credential: it is written with owner-only
+permissions, and anyone holding it can browse as that verified session.
+
+`import` refuses to overwrite a session already saved on the target unless `--replace` is given, and
+never clears a cooldown. Imported sessions cover HTTP reads only; browser-only pages still launch
+Chromium on the target. Yad2 may tie verification to the network it was completed on, so a session
+moved to another IP address can be challenged again; that is reported as a verification error.
+
 ### Shared browser and diagnostics
 
 CLI commands and MCP automatically connect to one local service per `YAD2_DATA_DIR`. The first uncached
@@ -510,9 +539,10 @@ uv run pytest -m live tests/test_live.py
 
 Offline tests cover URL/filter validation, observed payload shapes, missing/malformed data, pagination,
 cache persistence/expiry, pacing, challenge cooldown, attribute normalization, saved-search concurrency,
-CLI output, cookie scope/persistence, HTTP cancellation, cross-client session updates, and a real MCP
-stdio and Streamable HTTP subprocess round trips. Saved-search comparisons and conflict handling are tested offline.
-CI runs offline checks only. The live example test may eventually fail when the listing expires.
+CLI output, cookie scope/persistence, session export/import scoping, HTTP cancellation, cross-client
+session updates, and a real MCP stdio and Streamable HTTP subprocess round trips. Saved-search
+comparisons and conflict handling are tested offline. CI runs offline checks only. The live example
+test may eventually fail when the listing expires.
 
 Live-verified on **2026-11-05**: the supplied item (NVIDIA 5070 ti, ₪3,500, Tel Aviv–Yafo), RTX searches,
 price/product-type filtering, second-page navigation, furniture searches, category discovery, and
