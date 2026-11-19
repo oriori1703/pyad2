@@ -11,50 +11,56 @@ structured page data, with Chromium for session verification and browser-only pa
 
 ## Quick start
 
-Requires Python 3.11+ and [uv](https://docs.astral.sh/uv/).
+Requires [uv](https://docs.astral.sh/uv/). `uvx` runs the tools straight from GitHub and provisions a
+suitable Python (3.11+) on demand; no clone is needed.
 
 ```sh
-uv sync --locked --all-packages
-uv run yad2 install-browser
-uv run yad2 session  # Initialize saved cookies and the matching HTTP user agent once.
+# Every `yad2` command in this README is this uvx invocation; the alias keeps the examples short.
+alias yad2="uvx --from 'git+https://github.com/oriori1703/pyad2#subdirectory=packages/yad2-agent' yad2"
+
+yad2 install-browser
+yad2 session  # Initialize saved cookies and the matching HTTP user agent once.
 
 # The example listing (a numeric market ID works too)
-uv run yad2 get https://www.yad2.co.il/market/item/15405193887804
+yad2 get https://www.yad2.co.il/market/item/15405193887804
 
 # Used/like-new graphics cards under ₪2,000
-uv run yad2 search RTX --product-type 285 --condition 2 --condition 3 --max-price 2000 --sort priceAsc
+yad2 search RTX --product-type 285 --condition 2 --condition 3 --max-price 2000 --sort priceAsc
 
 # Furniture: a text search, or a filtered collection
-uv run yad2 search 'ספה' --max-price 1500 --city 5000
-uv run yad2 search --collection furniture --max-price 1500 --city 5000
+yad2 search 'ספה' --max-price 1500 --city 5000
+yad2 search --collection furniture --max-price 1500 --city 5000
 
 # Discover live collection slugs
-uv run yad2 categories --query computer
-uv run yad2 categories --query 'ריהוט'
+yad2 categories --query computer
+yad2 categories --query 'ריהוט'
 
 # Offline product/attribute IDs and readable enum names
-uv run yad2 product-types --query computer
-uv run yad2 attributes COMPUTER_COMPONENTS
-uv run yad2 search RTX --product-type COMPUTER_COMPONENTS --attribute 155=13287
+yad2 product-types --query computer
+yad2 attributes COMPUTER_COMPONENTS
+yad2 search RTX --product-type COMPUTER_COMPONENTS --attribute 155=13287
 
 # Pagination: a single page, or a bounded sequential scan
-uv run yad2 search RTX --page 2
-uv run yad2 search RTX --max-pages 3 --max-items 100
-uv run yad2 search-url 'https://www.yad2.co.il/market/search?q=RTX&pageNumber=3'
+yad2 search RTX --page 2
+yad2 search RTX --max-pages 3 --max-items 100
+yad2 search-url 'https://www.yad2.co.il/market/search?q=RTX&pageNumber=3'
 
 # Live filter options and counts for a query or collection
-uv run yad2 filters RTX --product-type COMPUTER_COMPONENTS
-uv run yad2 filters --collection furniture
+yad2 filters RTX --product-type COMPUTER_COMPONENTS
+yad2 filters --collection furniture
 
 # Save a search locally; each check fetches fresh pages
-uv run yad2 watch save gpu --search-json '{"query":"RTX","product_types":["285"],"max_price":2000}' --max-pages 3
-uv run yad2 watch check gpu
-uv run yad2 watch list
-uv run yad2 watch delete gpu
+yad2 watch save gpu --search-json '{"query":"RTX","product_types":["285"],"max_price":2000}' --max-pages 3
+yad2 watch check gpu
+yad2 watch list
+yad2 watch delete gpu
 
 # Other sections: copy the site's filtered URL; query names differ by section
-uv run yad2 search-url 'https://www.yad2.co.il/realestate/rent?city=5000&maxPrice=6000'
+yad2 search-url 'https://www.yad2.co.il/realestate/rent?city=5000&maxPrice=6000'
 ```
+
+To put `yad2` and `yad2-mcp` on your `PATH` instead of using the alias, run
+`uv tool install 'git+https://github.com/oriori1703/pyad2#subdirectory=packages/yad2-agent'`.
 
 Queries remain in the supplied language. Hebrew usually works best for furniture; English product/model
 names work well for hardware. Results reflect Yad2's relevance and promotion logic, not exact substring
@@ -107,30 +113,31 @@ its definition and observation history; `cache-clear` leaves watches intact.
 
 ## MCP setup
 
-Add this to your MCP client's server configuration, replacing the absolute project path:
+Add this to your MCP client's server configuration:
 
 ```json
 {
   "mcpServers": {
     "yad2": {
-      "command": "uv",
-      "args": ["--directory", "/absolute/path/to/yad2", "run", "--locked", "--package", "yad2-agent", "yad2-mcp"]
+      "command": "uvx",
+      "args": ["--from", "git+https://github.com/oriori1703/pyad2#subdirectory=packages/yad2-agent", "yad2-mcp"]
     }
   }
 }
 ```
 
-`uv run yad2 serve` is an equivalent stdio entry point. Install the browser before starting the server.
-Use an absolute path to `uv` if your desktop client's PATH does not include it.
+`yad2 serve` is an equivalent stdio entry point. Install the browser before starting the server.
+Use an absolute path to `uvx` if your desktop client's PATH does not include it.
 
 ### Streamable HTTP
 
 Both entry points also support MCP over Streamable HTTP:
 
 ```sh
-uv run yad2 serve --transport http --host 127.0.0.1 --port 8000
-# Equivalent:
-uv run yad2-mcp --transport http --host 127.0.0.1 --port 8000
+yad2 serve --transport http --host 127.0.0.1 --port 8000
+# Equivalent, using the dedicated entry point:
+uvx --from 'git+https://github.com/oriori1703/pyad2#subdirectory=packages/yad2-agent' \
+  yad2-mcp --transport http --host 127.0.0.1 --port 8000
 ```
 
 Connect your MCP client to **`http://127.0.0.1:8000/mcp`**. For clients accepting URL-based server entries:
@@ -207,8 +214,9 @@ the client does not forward session credentials to arbitrary redirect targets.
 To force the previous browser-based behavior, stop the service and configure all clients consistently:
 
 ```sh
-uv run yad2 browser-stop
-YAD2_TRANSPORT=browser uv run yad2 search RTX
+yad2 browser-stop
+export YAD2_TRANSPORT=browser
+yad2 search RTX
 ```
 
 To reduce repeated challenges:
@@ -222,7 +230,7 @@ To reduce repeated challenges:
 For first-time setup, an older saved session without HTTP identity metadata, or expired verification:
 
 ```sh
-uv run yad2 session
+yad2 session
 ```
 
 A visible browser opens for up to three minutes. Complete verification there; a successful page load saves
@@ -238,10 +246,10 @@ start it. The service listens only on loopback and authenticates requests using 
 
 ```sh
 # Inspect ownership and cooldown without starting a service or navigating Yad2.
-uv run yad2 status
+yad2 status
 
 # Stop the service once its requests have finished; the next network request starts it again.
-uv run yad2 browser-stop
+yad2 browser-stop
 ```
 
 `status` returns JSON with the service PID, configured transport, actual `browser_running` state, current
@@ -251,9 +259,16 @@ Credentials and cookies are omitted; HTTP identity presence does not establish s
 Saved-state presence does not assert that an account login is still valid. Ordinary public searches do
 not require account login; a complete taxonomy refresh does.
 
-**Upgrading an already running MCP server:** restart it to load the new tools. Run `uv run yad2 browser-stop`
+**Upgrading:** `uvx` reuses its cached build. To fetch the latest commit, run any command once with
+`--refresh`:
+
+```sh
+uvx --refresh --from 'git+https://github.com/oriori1703/pyad2#subdirectory=packages/yad2-agent' yad2 status
+```
+
+**Upgrading an already running MCP server:** restart it to load the new tools. Run `yad2 browser-stop`
 to stop any older service; the next uncached request starts the updated HTTP-first protocol. Run
-`uv run yad2 session` once if `status` reports missing HTTP identity metadata.
+`yad2 session` once if `status` reports missing HTTP identity metadata.
 An older process or a direct catalog capture can still own the exclusive browser lock; `status` identifies
 this situation. Finish that operation before using the shared service. When changing service settings,
 run `browser-stop` first. Startup diagnostics are in `browser-service.log` in the private data directory.
@@ -285,13 +300,19 @@ Constructor settings and equivalent environment variables:
 
 State is outside the repository. Browser state files are saved with owner-only permissions. On macOS,
 default state is under `~/Library/Application Support/yad2` and cache under `~/Library/Caches/yad2`.
-`uv run yad2 cache-clear` deletes page data but preserves the request budget.
+`yad2 cache-clear` deletes page data but preserves the request budget.
 
 Application errors are JSON on stderr: exit `2` for invalid input/other failures, `3` for verification,
 and `4` for rate limiting/cooldown. Typer argument/option usage errors use its standard stderr help.
 MCP failures use protocol error results with actionable messages.
 
 ## Python library
+
+Add the client to a project directly from GitHub:
+
+```sh
+uv add 'yad2-client @ git+https://github.com/oriori1703/pyad2#subdirectory=packages/yad2-client'
+```
 
 ```python
 import anyio
@@ -435,7 +456,8 @@ their fetch date and source URL; enum conversion raises `ValueError` for unknown
 
 The refresh tool uses authenticated, sequential browser GET requests, with at least three seconds
 between requests, stopping on challenges or errors. It never submits the publishing form. Use a fresh
-capture directory for a new snapshot; reuse it only to resume an interrupted capture.
+capture directory for a new snapshot; reuse it only to resume an interrupted capture. The tool is not
+part of the installed packages; run it from a repository checkout (see [Development](#development)).
 
 ```sh
 # Sign in locally and leave the browser open; metadata is stored outside the repository.
@@ -460,8 +482,8 @@ sections may use different frontends; universal normalized coverage is not claim
 data without changing the browser layer:
 
 ```sh
-uv run yad2 page 'https://www.yad2.co.il/vehicles/cars' --path props.pageProps
-uv run yad2 page 'https://www.yad2.co.il/vehicles/cars' --path props.pageProps.dehydratedState.queries.0.state.data
+yad2 page 'https://www.yad2.co.il/vehicles/cars' --path props.pageProps
+yad2 page 'https://www.yad2.co.il/vehicles/cars' --path props.pageProps.dehydratedState.queries.0.state.data
 ```
 
 Oversized JSON values return `omitted: true`, size and child keys rather than broken/truncated JSON.
@@ -469,7 +491,12 @@ Descend with a narrower path. Pages without `__NEXT_DATA__` produce an explicit 
 
 ## Development
 
+Clone the repository to work on the code. Inside the checkout, `uv run yad2 …` and `uv run yad2-mcp`
+run the local sources instead of the GitHub build.
+
 ```sh
+git clone https://github.com/oriori1703/pyad2.git
+cd pyad2
 uv sync --locked --all-packages
 uv run pytest
 uv run ruff check .
